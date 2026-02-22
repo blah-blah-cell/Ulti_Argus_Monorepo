@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import ipaddress
 import logging
 import sqlite3
 import subprocess
 from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -67,6 +67,13 @@ class BlacklistManager:
             anonymizer: Optional hash anonymizer for IP anonymization
         """
         self.config = config
+        self.anonymizer = anonymizer
+
+        if not self.anonymizer:
+            salt = getattr(config, 'anonymization_salt', None)
+            if not salt:
+                raise ValueError("Anonymization salt must be configured")
+            self.anonymizer = HashAnonymizer(salt=salt)
         
         # Paths are loaded from config (which supports env var overrides)
         self._sqlite_db_path = Path(config.blacklist_db_path)
@@ -91,6 +98,9 @@ class BlacklistManager:
         # Initialize storage systems
         self._ensure_directories()
         self._initialize_database()
+
+        # Initialize lookup cache to avoid database hits for frequent IPs
+        self.is_blacklisted = lru_cache(maxsize=1024)(self.is_blacklisted)
     
     def _ensure_directories(self) -> None:
         """Ensure required directories exist."""
@@ -174,7 +184,7 @@ class BlacklistManager:
                 level="error",
                 error=str(e)
             )
-            raise BlacklistError(f"Database initialization failed: {e}")
+            raise BlacklistError(f"Database initialization failed: {e}") from e
     
     def add_to_blacklist(
         self, 
@@ -214,7 +224,10 @@ class BlacklistManager:
                 expires_at = datetime.now() + timedelta(hours=ttl_hours)
             
             # Anonymize IP for storage (if needed)
-            anonymized_ip = self.anonymizer.anonymize_ip(ip_address) if self.anonymizer else ip_address
+            if self.anonymizer:
+                anonymized_ip = self.anonymizer.anonymize_ip(ip_address)
+            else:
+                anonymized_ip = ip_address
             
             with sqlite3.connect(self._sqlite_db_path) as conn:
                 cursor = conn.cursor()
@@ -246,6 +259,9 @@ class BlacklistManager:
                 # Update statistics
                 self._update_stats()
                 
+                # Clear lookup cache
+                self.is_blacklisted.cache_clear()
+
                 # Enforce immediately if requested
                 if enforce:
                     return self._enforce_blacklist_entry(anonymized_ip, reason, risk_level)
@@ -274,7 +290,10 @@ class BlacklistManager:
         """
         try:
             # Anonymize IP for lookup
-            anonymized_ip = self.anonymizer.anonymize_ip(ip_address) if self.anonymizer else ip_address
+            if self.anonymizer:
+                anonymized_ip = self.anonymizer.anonymize_ip(ip_address)
+            else:
+                anonymized_ip = ip_address
             
             with sqlite3.connect(self._sqlite_db_path) as conn:
                 cursor = conn.cursor()
@@ -341,7 +360,10 @@ class BlacklistManager:
             True if IP is blacklisted and active
         """
         try:
-            anonymized_ip = self.anonymizer.anonymize_ip(ip_address) if self.anonymizer else ip_address
+            if self.anonymizer:
+                anonymized_ip = self.anonymizer.anonymize_ip(ip_address)
+            else:
+                anonymized_ip = ip_address
             
             with sqlite3.connect(self._sqlite_db_path) as conn:
                 cursor = conn.cursor()
@@ -361,7 +383,11 @@ class BlacklistManager:
                 
                 # Check if entry has expired
                 if expires_at:
-                    expiry_time = datetime.fromisoformat(expires_at) if isinstance(expires_at, str) else expires_at
+                    if isinstance(expires_at, str):
+                        expiry_time = datetime.fromisoformat(expires_at)
+                    else:
+                        expiry_time = expires_at
+
                     if datetime.now() > expiry_time:
                         # Mark as inactive if expired
                         cursor.execute("""
@@ -514,6 +540,9 @@ class BlacklistManager:
                     )
                     
                     self._update_stats()
+
+                    # Clear lookup cache
+                    self.is_blacklisted.cache_clear()
                 
                 return cleaned_count
                 
