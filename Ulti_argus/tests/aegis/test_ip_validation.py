@@ -22,6 +22,8 @@ def blacklist_manager():
     config = MagicMock()
     config.blacklist_db_path = ":memory:"
     config.blacklist_json_path = "/tmp/blacklist.json"
+    config.iptables_chain_name = "AEGIS-DROP"
+    config.iptables_table = "filter"
 
     # Mocking _ensure_directories and _initialize_database to avoid side effects
     BlacklistManager._ensure_directories = MagicMock()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
@@ -81,6 +82,30 @@ def require_non_negative_int(value: Any, *, path: str) -> int:
     if i < 0:
         raise ValidationError([ValidationIssue(path, "must be >= 0")])
     return i
+
+
+def require_safe_name(value: Any, *, path: str) -> str:
+    """Validate that a name is safe for use in shell commands like iptables.
+
+    Args:
+        value: Value to validate
+        path: Configuration path for error reporting
+
+    Returns:
+        The validated string
+    """
+    s = require_non_empty_str(value, path=path)
+    # Match alphanumeric characters, underscores, and hyphens.
+    # iptables chain names should be less than 29 characters.
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", s):
+        raise ValidationError([
+            ValidationIssue(path, "must contain only alphanumeric characters, underscores, and hyphens")
+        ])
+    if len(s) > 28:
+        raise ValidationError([
+            ValidationIssue(path, "must be less than 29 characters")
+        ])
+    return s
 
 
 def get_optional(mapping: Mapping[str, Any], key: str, default: Any = None) -> Any:
