@@ -66,7 +66,15 @@ class BlacklistManager:
         Args:
             config: Enforcement configuration
             anonymizer: Optional hash anonymizer for IP anonymization
+
+        Raises:
+            ValueError: If configuration is invalid
+            BlacklistError: If initialization fails
         """
+        # Validate config inputs (Zero Trust)
+        if not hasattr(config, 'blacklist_db_path') or not hasattr(config, 'blacklist_json_path'):
+            raise ValueError("Config missing required blacklist paths")
+
         self.config = config
         self.anonymizer = anonymizer
 
@@ -96,29 +104,44 @@ class BlacklistManager:
         self._iptables_available: Optional[bool] = None
         self._kronos_enforcer = KronosEnforcer() if _KRONOS_AVAILABLE else None
 
-        # Initialize storage systems
-        self._ensure_directories()
-        self._initialize_database()
+        # Initialize storage systems with robust error handling
+        try:
+            self._ensure_directories()
+            self._initialize_database()
+        except (OSError, sqlite3.Error) as e:
+             # Already logged in specific methods, but ensure we raise proper exception
+             # and provide context
+             raise BlacklistError(f"BlacklistManager initialization failed: {e}") from e
 
         # Initialize lookup cache to avoid database hits for frequent IPs
         self.is_blacklisted = lru_cache(maxsize=1024)(self.is_blacklisted)
     
     def _ensure_directories(self) -> None:
         """Ensure required directories exist."""
-        blacklist_dir = self._sqlite_db_path.parent
-        blacklist_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create backup directory
-        backup_dir = blacklist_dir / "backups"
-        backup_dir.mkdir(exist_ok=True)
-        
-        log_event(
-            logger,
-            "blacklist_directories_ensured",
-            level="debug",
-            db_path=str(self._sqlite_db_path),
-            json_path=str(self._json_cache_path)
-        )
+        try:
+            blacklist_dir = self._sqlite_db_path.parent
+            blacklist_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create backup directory
+            backup_dir = blacklist_dir / "backups"
+            backup_dir.mkdir(exist_ok=True)
+
+            log_event(
+                logger,
+                "blacklist_directories_ensured",
+                level="debug",
+                db_path=str(self._sqlite_db_path),
+                json_path=str(self._json_cache_path)
+            )
+        except OSError as e:
+            log_event(
+                logger,
+                "blacklist_directory_creation_failed",
+                level="critical",
+                error=str(e),
+                path=str(self._sqlite_db_path.parent)
+            )
+            raise
     
     def _initialize_database(self) -> None:
         """Initialize SQLite database and create tables."""
@@ -178,7 +201,7 @@ class BlacklistManager:
                     level="info"
                 )
                 
-        except Exception as e:
+        except sqlite3.Error as e:
             log_event(
                 logger,
                 "blacklist_database_init_failed",
@@ -269,13 +292,24 @@ class BlacklistManager:
                 
                 return True
                 
+        except (sqlite3.Error, ValueError, BlacklistValidationError) as e:
+            log_event(
+                logger,
+                "add_to_blacklist_operation_failed",
+                level="error",
+                ip_address=ip_address,
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return False
         except Exception as e:
             log_event(
                 logger,
-                "add_to_blacklist_failed",
-                level="error",
+                "add_to_blacklist_unexpected_error",
+                level="critical",
                 ip_address=ip_address,
-                error=str(e)
+                error=str(e),
+                error_type=type(e).__name__
             )
             return False
     
@@ -341,13 +375,24 @@ class BlacklistManager:
                 source=source
             )
             return False
+        except (sqlite3.Error, ValueError) as e:
+            log_event(
+                logger,
+                "remove_from_blacklist_operation_failed",
+                level="error",
+                ip_address=ip_address,
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return False
         except Exception as e:
             log_event(
                 logger,
-                "remove_from_blacklist_failed",
-                level="error",
+                "remove_from_blacklist_unexpected_error",
+                level="critical",
                 ip_address=ip_address,
-                error=str(e)
+                error=str(e),
+                error_type=type(e).__name__
             )
             return False
     
@@ -409,13 +454,24 @@ class BlacklistManager:
                 
                 return True
                 
+        except (sqlite3.Error, ValueError) as e:
+            log_event(
+                logger,
+                "blacklist_check_operation_failed",
+                level="error",
+                ip_address=ip_address,
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return False
         except Exception as e:
             log_event(
                 logger,
-                "blacklist_check_failed",
-                level="error",
+                "blacklist_check_unexpected_error",
+                level="critical",
                 ip_address=ip_address,
-                error=str(e)
+                error=str(e),
+                error_type=type(e).__name__
             )
             return False
     
@@ -502,12 +558,22 @@ class BlacklistManager:
                 
                 return entries
                 
+        except (sqlite3.Error, ValueError, json.JSONDecodeError) as e:
+            log_event(
+                logger,
+                "get_blacklist_entries_operation_failed",
+                level="error",
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return []
         except Exception as e:
             log_event(
                 logger,
-                "get_blacklist_entries_failed",
-                level="error",
-                error=str(e)
+                "get_blacklist_entries_unexpected_error",
+                level="critical",
+                error=str(e),
+                error_type=type(e).__name__
             )
             return []
     
@@ -547,12 +613,22 @@ class BlacklistManager:
                 
                 return cleaned_count
                 
-        except Exception as e:
+        except sqlite3.Error as e:
             log_event(
                 logger,
                 "cleanup_expired_entries_failed",
                 level="error",
-                error=str(e)
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return 0
+        except Exception as e:
+            log_event(
+                logger,
+                "cleanup_expired_entries_unexpected_error",
+                level="critical",
+                error=str(e),
+                error_type=type(e).__name__
             )
             return 0
     
@@ -636,13 +712,24 @@ class BlacklistManager:
             
             return success
             
+        except (ValueError, OSError) as e:
+            self._sync_failures += 1
+            log_event(
+                logger,
+                "firebase_sync_error",
+                level="error",
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return False
         except Exception as e:
             self._sync_failures += 1
             log_event(
                 logger,
-                "firebase_sync_exception",
-                level="error",
-                error=str(e)
+                "firebase_sync_unexpected_error",
+                level="critical",
+                error=str(e),
+                error_type=type(e).__name__
             )
             return False
     
@@ -668,12 +755,22 @@ class BlacklistManager:
             
             return export_data
             
+        except (OSError, TypeError, ValueError) as e:
+            log_event(
+                logger,
+                "export_to_json_error",
+                level="error",
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return None
         except Exception as e:
             log_event(
                 logger,
-                "export_to_json_failed",
-                level="error",
-                error=str(e)
+                "export_to_json_unexpected_error",
+                level="critical",
+                error=str(e),
+                error_type=type(e).__name__
             )
             return None
     
@@ -703,11 +800,13 @@ class BlacklistManager:
             return FIREBASE_AVAILABLE
             
         except Exception as e:
+            # Catching generic Exception because Firebase SDK can raise various exceptions
             log_event(
                 logger,
                 "firebase_upload_failed",
                 level="error",
-                error=str(e)
+                error=str(e),
+                error_type=type(e).__name__
             )
             return False
     
@@ -758,13 +857,24 @@ class BlacklistManager:
             
             return success
             
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+            log_event(
+                logger,
+                "blacklist_enforcement_process_error",
+                level="error",
+                ip_address=ip_address,
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return False
         except Exception as e:
             log_event(
                 logger,
-                "blacklist_enforcement_failed",
-                level="error",
+                "blacklist_enforcement_unexpected_error",
+                level="critical",
                 ip_address=ip_address,
-                error=str(e)
+                error=str(e),
+                error_type=type(e).__name__
             )
             return False
     
@@ -835,13 +945,24 @@ class BlacklistManager:
             
             return True
             
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_event(
+                logger,
+                "iptables_command_failed",
+                level="error",
+                ip_address=ip_address,
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return False
         except Exception as e:
             log_event(
                 logger,
-                "iptables_operation_failed",
-                level="error",
+                "iptables_unexpected_error",
+                level="critical",
                 ip_address=ip_address,
-                error=str(e)
+                error=str(e),
+                error_type=type(e).__name__
             )
             return False
     
@@ -887,13 +1008,24 @@ class BlacklistManager:
                 )
                 return True  # Not an error if rule doesn't exist
             
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+            log_event(
+                logger,
+                "iptables_remove_command_failed",
+                level="error",
+                ip_address=ip_address,
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return False
         except Exception as e:
             log_event(
                 logger,
-                "iptables_remove_failed",
-                level="error",
+                "iptables_remove_unexpected_error",
+                level="critical",
                 ip_address=ip_address,
-                error=str(e)
+                error=str(e),
+                error_type=type(e).__name__
             )
             return False
     
@@ -947,12 +1079,21 @@ class BlacklistManager:
                 """)
                 self._stats['expired_entries'] = cursor.fetchone()[0]
                 
-        except Exception as e:
+        except (sqlite3.Error, ValueError) as e:
             log_event(
                 logger,
                 "stats_update_failed",
                 level="error",
-                error=str(e)
+                error=str(e),
+                error_type=type(e).__name__
+            )
+        except Exception as e:
+            log_event(
+                logger,
+                "stats_update_unexpected_error",
+                level="critical",
+                error=str(e),
+                error_type=type(e).__name__
             )
     
     def get_statistics(self) -> Dict[str, Any]:
@@ -1007,12 +1148,22 @@ class BlacklistManager:
             
             return True
             
+        except (OSError, sqlite3.Error) as e:
+            log_event(
+                logger,
+                "emergency_stop_operation_failed",
+                level="critical",
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return False
         except Exception as e:
             log_event(
                 logger,
-                "emergency_stop_failed",
-                level="error",
-                error=str(e)
+                "emergency_stop_unexpected_error",
+                level="critical",
+                error=str(e),
+                error_type=type(e).__name__
             )
             return False
     
@@ -1050,11 +1201,21 @@ class BlacklistManager:
             
             return True
             
+        except (OSError, sqlite3.Error) as e:
+            log_event(
+                logger,
+                "emergency_restore_operation_failed",
+                level="critical",
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            return False
         except Exception as e:
             log_event(
                 logger,
-                "emergency_restore_failed",
-                level="error",
-                error=str(e)
+                "emergency_restore_unexpected_error",
+                level="critical",
+                error=str(e),
+                error_type=type(e).__name__
             )
             return False
