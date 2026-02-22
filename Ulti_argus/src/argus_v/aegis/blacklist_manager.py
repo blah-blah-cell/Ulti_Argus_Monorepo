@@ -24,6 +24,12 @@ try:
 except ImportError:
     FIREBASE_AVAILABLE = False
 
+try:
+    from ..kronos.enforcer import KronosEnforcer
+    _KRONOS_AVAILABLE = True
+except ImportError:
+    _KRONOS_AVAILABLE = False
+
 from ..oracle_core import HashAnonymizer
 from ..oracle_core.logging import log_event
 
@@ -70,7 +76,6 @@ class BlacklistManager:
         self._sync_failures = 0
         self._max_sync_failures = 3
         
-        # Statistics
         self._stats = {
             'total_entries': 0,
             'active_entries': 0,
@@ -81,6 +86,7 @@ class BlacklistManager:
         }
         
         self._iptables_available: Optional[bool] = None
+        self._kronos_enforcer = KronosEnforcer() if _KRONOS_AVAILABLE else None
 
         # Initialize storage systems
         self._ensure_directories()
@@ -287,6 +293,10 @@ class BlacklistManager:
                 
                 # Remove from iptables if active
                 self._remove_from_iptables(anonymized_ip)
+                
+                # Remove from eBPF via Kronos
+                if self._kronos_enforcer:
+                    self._kronos_enforcer.unblock_ip(anonymized_ip)
                 
                 log_event(
                     logger,
@@ -695,8 +705,15 @@ class BlacklistManager:
                 )
                 return True
             
-            # Add to iptables
-            success = self._add_to_iptables(ip_address, reason, risk_level)
+            # Add to iptables structure
+            success_os = self._add_to_iptables(ip_address, reason, risk_level)
+            
+            # Add directly to Kernel eBPF Map
+            success_ebpf = False
+            if self._kronos_enforcer:
+                success_ebpf = self._kronos_enforcer.block_ip(ip_address)
+            
+            success = success_os or success_ebpf
             
             if success:
                 self._stats['enforcement_actions'] += 1
