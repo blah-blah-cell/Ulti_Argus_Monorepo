@@ -7,6 +7,7 @@ with proper dry-run mode handling and service lifecycle management.
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import os
@@ -447,6 +448,16 @@ class AegisDaemon:
                     self._should_sync_firebase()):
                     blacklist_manager.sync_with_firebase()
                 
+                # Prune stats lists to prevent unbounded growth
+                max_list_size = 50
+                if len(self._stats.get('components_failed', [])) > max_list_size:
+                    self._stats['components_failed'] = self._stats['components_failed'][-max_list_size:]
+                if len(self._stats.get('configuration_issues', [])) > max_list_size:
+                    self._stats['configuration_issues'] = self._stats['configuration_issues'][-max_list_size:]
+
+                # Force garbage collection
+                gc.collect()
+
                 # Sleep for monitoring interval
                 time.sleep(60)  # Monitor every minute
                 

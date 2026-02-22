@@ -14,6 +14,7 @@ before enforcement:
 
 from __future__ import annotations
 
+import gc
 import logging
 import threading
 import time
@@ -263,9 +264,12 @@ class PredictionEngine:
         """Background thread that polls for new CSV files from Retina."""
         consecutive_errors = 0
         max_consecutive_errors = self.polling_config.max_poll_errors
+        poll_count = 0
         
         while self._running:
             try:
+                poll_count += 1
+
                 # Check for new CSV files
                 new_files = self._find_new_csv_files()
                 
@@ -287,6 +291,12 @@ class PredictionEngine:
                 else:
                     time.sleep(1)  # Brief pause before next check
                 
+                # Periodic maintenance
+                if poll_count % 60 == 0:  # Every minute (approx)
+                    self._cleanup_processed_files()
+                    gc.collect()
+                    poll_count = 0
+
             except Exception as e:
                 consecutive_errors += 1
                 self._stats['poll_errors'] += 1
@@ -316,6 +326,40 @@ class PredictionEngine:
             if self._running:
                 time.sleep(self.polling_config.poll_interval_seconds)
     
+    def _cleanup_processed_files(self) -> None:
+        """Cleanup processed files list based on disk existence."""
+        try:
+            csv_dir = Path(self.polling_config.csv_directory)
+            if not csv_dir.exists():
+                return
+
+            # Identify files that no longer exist (e.g. rotated out)
+            processed_list = list(self._processed_files)
+            removed_count = 0
+
+            for filename in processed_list:
+                file_path = csv_dir / filename
+                if not file_path.exists():
+                    self._processed_files.discard(filename)
+                    removed_count += 1
+
+            if removed_count > 0:
+                log_event(
+                    logger,
+                    "processed_files_cleanup",
+                    level="debug",
+                    cleaned_count=removed_count,
+                    remaining_count=len(self._processed_files)
+                )
+
+        except Exception as e:
+            log_event(
+                logger,
+                "processed_files_cleanup_failed",
+                level="warning",
+                error=str(e)
+            )
+
     def _find_new_csv_files(self) -> List[Path]:
         """Find new CSV files in Retina output directory.
         
@@ -766,34 +810,38 @@ class PredictionEngine:
             predictions_df: DataFrame with prediction results
         """
         try:
-            for _, row in predictions_df.iterrows():
+            # Use itertuples for better performance and memory usage
+            for row in predictions_df.itertuples(index=False):
                 # Determine if action is needed
                 action_needed = False
                 action_reason = ""
                 risk_level = "low"
                 
                 # Check prediction results
-                prediction = row.get('prediction', 1)
-                anomaly_score = row.get('anomaly_score', 0)
-                risk_level = row.get('risk_level', 'low')
+                prediction = getattr(row, 'prediction', 1)
+                anomaly_score = getattr(row, 'anomaly_score', 0)
+                risk_level = getattr(row, 'risk_level', 'low')
                 
                 # Check for trusted IPs (Immediate Relief)
-                src_ip = row.get('src_ip', '')
-                dst_ip = row.get('dst_ip', '')
+                src_ip = getattr(row, 'src_ip', '')
+                dst_ip = getattr(row, 'dst_ip', '')
 
                 # ── Kronos triage ──────────────────────────────────────────
-                # If a KronosRouter is wired in, ask it how to handle this
-                # flow before we apply any enforcement logic.
+                # If a KronosRouter instance is passed at construction, each flow is triaged
+                # before enforcement:
+                #   PASS     → skip enforcement entirely (Kronos confident it is normal)
+                #   IF_ONLY  → trust IsolationForest verdict as before
+                #   ESCALATE → request CNN analysis via mnemosyne pytorch_inference
                 if self.kronos_router is not None:
                     # Extract payload if it came from IPC socket
-                    payload_bytes = row.get('__raw_payload__', None)
+                    payload_bytes = getattr(row, '__raw_payload__', None)
                     
                     kronos_decision = self.kronos_router.route(
                         if_score=float(anomaly_score),
                         src_ip=src_ip,
                         dst_ip=dst_ip,
-                        protocol=str(row.get('protocol', 'OTHER')),
-                        dst_port=int(row.get('dst_port', 0)),
+                        protocol=str(getattr(row, 'protocol', 'OTHER')),
+                        dst_port=int(getattr(row, 'dst_port', 0)),
                         payload_available=(payload_bytes is not None),
                     )
 
@@ -859,7 +907,11 @@ class PredictionEngine:
                     action_needed = True
 
                     # Generate explanation for the anomaly
-                    explanation = self.model_manager.explain_anomaly(row)
+                    # Note: explain_anomaly expects a Series-like object or dict.
+                    # NamedTuple is not directly compatible if it checks keys/index.
+                    # Converting to dict for explanation function.
+                    row_dict = row._asdict()
+                    explanation = self.model_manager.explain_anomaly(pd.Series(row_dict))
                     explanation_str = ", ".join(explanation)
 
                     action_reason = f"Anomaly detected: {explanation_str} (score: {anomaly_score:.3f})"
@@ -869,8 +921,8 @@ class PredictionEngine:
                         action_reason = f"High-risk anomaly: {explanation_str} (score: {anomaly_score:.3f}, risk: {risk_level})"
                 
                 # Check for blacklist violations
-                src_ip = row.get('src_ip', '')
-                dst_ip = row.get('dst_ip', '')
+                src_ip = getattr(row, 'src_ip', '')
+                dst_ip = getattr(row, 'dst_ip', '')
                 
                 if src_ip and self.blacklist_manager.is_blacklisted(src_ip):
                     action_needed = True
@@ -894,11 +946,11 @@ class PredictionEngine:
                                 'prediction_score': float(anomaly_score),
                                 'flow_details': {
                                     'dst_ip': dst_ip,
-                                    'src_port': row.get('src_port'),
-                                    'dst_port': row.get('dst_port'),
-                                    'protocol': row.get('protocol'),
-                                    'bytes_in': row.get('bytes_in'),
-                                    'bytes_out': row.get('bytes_out')
+                                    'src_port': getattr(row, 'src_port', None),
+                                    'dst_port': getattr(row, 'dst_port', None),
+                                    'protocol': getattr(row, 'protocol', None),
+                                    'bytes_in': getattr(row, 'bytes_in', None),
+                                    'bytes_out': getattr(row, 'bytes_out', None)
                                 }
                             }
                         )
