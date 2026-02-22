@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARGUS AI | Neural Defense Command</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --cyber-blue: #58a6ff;
+            --cyber-cyan: #00d4ff;
+            --threat-red: #f85149;
+            --obsidian: #0a0e14;
+            --slate-dark: #12171f;
+            --slate-medium: #1a2130;
+            --slate-light: #252d3d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --neon-purple: #a855f7;
+            --neon-green: #22c55e;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--obsidian);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .glass {
+            background: rgba(18, 23, 31, 0.6);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(88, 166, 255, 0.1);
+            border-radius: 16px;
+        }
+
+        .glass-strong {
+            background: rgba(26, 33, 48, 0.8);
+            backdrop-filter: blur(30px);
+            border: 1px solid rgba(88, 166, 255, 0.15);
+            border-radius: 20px;
+            box-shadow: 0 0 40px rgba(88, 166, 255, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+
+        .holo-border::before {
+            content: '';
+            position: absolute;
+            inset: -2px;
+            border-radius: 22px;
+            background: linear-gradient(135deg, var(--cyber-blue), var(--neon-purple), var(--cyber-cyan), var(--cyber-blue));
+            background-size: 400% 400%;
+            animation: gradient-rotate 8s linear infinite;
+            z-index: -1;
+            opacity: 0.5;
+        }
+
+        @keyframes gradient-rotate {
+            0% {
+                background-position: 0% 50%;
+            }
+
+            50% {
+                background-position: 100% 50%;
+            }
+
+            100% {
+                background-position: 0% 50%;
+            }
+        }
+
+        .text-glow-cyan {
+            text-shadow: 0 0 15px rgba(0, 212, 255, 0.6);
+        }
+
+        .text-glow-red {
+            text-shadow: 0 0 15px rgba(248, 81, 73, 0.6);
+        }
+
+        @keyframes float {
+
+            0%,
+            100% {
+                transform: translateY(0px);
+            }
+
+            50% {
+                transform: translateY(-10px);
+            }
+        }
+
+        #neural3D {
+            position: relative;
+            width: 100%;
+            height: 400px;
+            border-radius: 20px;
+            overflow: hidden;
+        }
+
+        .canvas-overlay {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: radial-gradient(ellipse at center, transparent 40%, rgba(10, 14, 20, 0.8) 100%);
+        }
+
+        .hud-corner {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border: 2px solid var(--cyber-blue);
+            opacity: 0.3;
+        }
+
+        .hud-corner.top-left {
+            top: 10px;
+            left: 10px;
+            border-right: none;
+            border-bottom: none;
+        }
+
+        .hud-corner.top-right {
+            top: 10px;
+            right: 10px;
+            border-left: none;
+            border-bottom: none;
+        }
+
+        .hud-corner.bottom-left {
+            bottom: 10px;
+            left: 10px;
+            border-right: none;
+            border-top: none;
+        }
+
+        .hud-corner.bottom-right {
+            bottom: 10px;
+            right: 10px;
+            border-left: none;
+            border-top: none;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            position: relative;
+        }
+
+        .status-dot::after {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border-radius: 50%;
+            background: inherit;
+            opacity: 0.4;
+            animation: pulse-ring 2s cubic-bezier(0.24, 0, 0.38, 1) infinite;
+        }
+
+        @keyframes pulse-ring {
+            0% {
+                transform: scale(0.5);
+                opacity: 0.8;
+            }
+
+            100% {
+                transform: scale(2.5);
+                opacity: 0;
+            }
+        }
+
+        .status-active {
+            background: var(--neon-green);
+            box-shadow: 0 0 10px var(--neon-green);
+        }
+
+        .status-warning {
+            background: #f59e0b;
+            box-shadow: 0 0 10px #f59e0b;
+        }
+
+        .status-alert {
+            background: var(--threat-red);
+            box-shadow: 0 0 10px var(--threat-red);
+        }
+
+        .plugin-card {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+        }
+
+        .plugin-card:hover {
+            transform: translateY(-2px);
+            background: rgba(88, 166, 255, 0.1);
+            border-color: rgba(88, 166, 255, 0.3);
+        }
+
+        .cyber-grid {
+            background-image:
+                linear-gradient(rgba(88, 166, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(88, 166, 255, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+        }
+
+        ::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--slate-light);
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--cyber-blue);
+        }
+
+        .log-entry {
+            animation: slide-in 0.4s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+        }
+
+        @keyframes slide-in {
+            from {
+                transform: translateX(20px);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+
+<body class="cyber-grid">
+    <header class="fixed top-0 left-0 right-0 z-50 glass border-b border-cyan-500/10">
+        <div class="max-w-[1700px] mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+                <div class="relative animate-float">
+                    <div
+                        class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 via-blue-500 to-purple-600 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                        </svg>
+                    </div>
+                </div>
+                <div>
+                    <h1
+                        class="text-xl font-bold bg-gradient-to-r from-cyan-400 to-purple-500 bg-clip-text text-transparent italic">
+                        ARGUS AI</h1>
+                    <p class="text-[10px] text-slate-500 mono tracking-widest uppercase">Hybrid Cloud-Edge Defense</p>
+                </div>
+            </div>
+
+            <nav class="hidden md:flex items-center gap-6">
+                <div class="flex flex-col items-end">
+                    <div class="flex items-center gap-2">
+                        <div class="status-dot status-active"></div>
+                        <span class="text-xs font-bold text-green-400 mono">NODE-01 ONLINE</span>
+                    </div>
+                    <span id="systemTime" class="text-lg font-bold text-cyan-400 text-glow-cyan mono">00:00:00</span>
+                </div>
+            </nav>
+        </div>
+    </header>
+
+    <main class="pt-24 pb-8 px-6 max-w-[1700px] mx-auto">
+        <div class="grid grid-cols-12 gap-6">
+            <!-- Left Panel: Plugins and Stats -->
+            <aside class="col-span-12 lg:col-span-3 space-y-6">
+                <div class="glass-strong p-5 holo-border relative">
+                    <h2 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                        <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path
+                                d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
+                        </svg>
+                        Neural Plugins
+                    </h2>
+                    <div class="space-y-3" id="pluginRegistry">
+                        <!-- Dynamic -->
+                    </div>
+                </div>
+
+                <div class="glass-strong p-5">
+                    <h2 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Traffic Matrix</h2>
+                    <div class="grid grid-cols-1 gap-3">
+                        <div class="p-3 glass rounded-xl flex items-center justify-between">
+                            <span class="text-xs text-slate-500 mono">TOTAL SCARED</span>
+                            <span id="packetsScanned" class="text-lg font-bold text-cyan-400 mono">0</span>
+                        </div>
+                        <div class="p-3 glass rounded-xl flex items-center justify-between">
+                            <span class="text-xs text-slate-500 mono">THREATS KILLED</span>
+                            <span id="threatsBlocked" class="text-lg font-bold text-red-500 mono">0</span>
+                        </div>
+                        <div class="p-3 glass rounded-xl flex items-center justify-between">
+                            <span class="text-xs text-slate-500 mono">CPU USAGE</span>
+                            <span id="cpuVal" class="text-lg font-bold text-purple-400 mono">0%</span>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Center View: 3D Visualization -->
+            <section class="col-span-12 lg:col-span-6 space-y-6">
+                <div class="glass-strong relative overflow-hidden h-[450px]">
+                    <div id="neural3D"></div>
+                    <div class="canvas-overlay"></div>
+
+                    <!-- HUD Elements -->
+                    <div class="absolute top-6 left-6 pointer-events-none">
+                        <h3 class="text-xl font-bold tracking-tight">Packet Flow Reconstruction</h3>
+                        <p class="text-[10px] text-slate-400 mono uppercase tracking-[0.2em]">Mnemosyne CNN Latent Space
+                        </p>
+                    </div>
+
+                    <div class="hud-corner top-left"></div>
+                    <div class="hud-corner top-right"></div>
+                    <div class="hud-corner bottom-left"></div>
+                    <div class="hud-corner bottom-right"></div>
+
+                    <div class="absolute bottom-6 left-6 flex gap-10">
+                        <div>
+                            <p class="text-[10px] text-slate-500 mono">MEMORY</p>
+                            <p id="memInfo" class="text-xl font-bold text-cyan-400 mono">--</p>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-slate-500 mono">UPTIME</p>
+                            <p id="uptime" class="text-xl font-bold text-white mono">--</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-6">
+                    <div class="glass-strong p-6 relative overflow-hidden group">
+                        <div class="flex justify-between items-start mb-4">
+                            <div>
+                                <h4 class="text-sm font-bold text-slate-200">Neural Accuracy</h4>
+                                <p class="text-[10px] text-slate-500 mono">Confidence Level</p>
+                            </div>
+                            <span id="confidenceValue" class="text-2xl font-bold text-cyan-400 mono">0%</span>
+                        </div>
+                        <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                            <div id="confidenceBar"
+                                class="h-full bg-gradient-to-r from-cyan-500 to-blue-600 transition-all duration-1000"
+                                style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="glass-strong p-6 relative overflow-hidden">
+                        <div class="flex justify-between items-start mb-4">
+                            <div>
+                                <h4 class="text-sm font-bold text-slate-200">System Load</h4>
+                                <p class="text-[10px] text-slate-500 mono">Thread Pressure</p>
+                            </div>
+                            <span id="loadValue" class="text-2xl font-bold text-green-400 mono">0%</span>
+                        </div>
+                        <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                            <div id="loadBar"
+                                class="h-full bg-gradient-to-r from-green-500 to-emerald-600 transition-all duration-1000"
+                                style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass-strong p-4 flex gap-4 items-center">
+                    <div class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></div>
+                    <input type="text" id="analyzeInput" placeholder="Feed raw payload to the AI..."
+                        class="flex-1 bg-transparent border-none text-sm mono text-white focus:outline-none placeholder-slate-600">
+                    <button id="analyzeBtn"
+                        class="px-6 py-2 bg-slate-800 hover:bg-cyan-600/20 text-cyan-400 border border-cyan-500/20 rounded-lg text-xs font-bold transition-all uppercase tracking-widest">
+                        Process
+                    </button>
+                </div>
+                <div id="analyzeResult" class="hidden glass p-4 text-center mono text-xs border border-cyan-500/10">
+                </div>
+            </section>
+
+            <!-- Right Panel: Logs -->
+            <aside class="col-span-12 lg:col-span-3">
+                <div class="glass-strong h-[calc(100vh-160px)] flex flex-col">
+                    <div class="p-5 border-b border-white/5 flex justify-between items-center">
+                        <h2 class="text-sm font-bold uppercase tracking-widest">Threat Feed</h2>
+                        <span
+                            class="px-2 py-0.5 rounded bg-red-500/10 text-red-500 text-[10px] font-bold animate-pulse">LIVE</span>
+                    </div>
+                    <div id="logsContainer" class="flex-1 overflow-y-auto p-4 space-y-3">
+                        <!-- Dynamic Logs -->
+                    </div>
+                    <div class="p-4 grid grid-cols-3 gap-2 border-t border-white/5 bg-black/20">
+                        <div class="text-center">
+                            <p id="vCount" class="text-sm font-bold text-green-400">0</p>
+                            <p class="text-[8px] text-slate-500">OK</p>
+                        </div>
+                        <div class="text-center">
+                            <p id="wCount" class="text-sm font-bold text-yellow-500">0</p>
+                            <p class="text-[8px] text-slate-500">WARN</p>
+                        </div>
+                        <div class="text-center">
+                            <p id="bCount" class="text-sm font-bold text-red-500">0</p>
+                            <p class="text-[8px] text-slate-500">BLOCK</p>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </div>
+    </main>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        class NeuralVisualizer {
+            constructor() {
+                this.container = document.getElementById('neural3D');
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(65, this.container.clientWidth / 450, 0.1, 1000);
+                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                this.renderer.setSize(this.container.clientWidth, 450);
+                this.container.appendChild(this.renderer.domElement);
+
+                this.camera.position.z = 35;
+                this.init();
+                this.animate();
+
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = this.container.clientWidth / 450;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(this.container.clientWidth, 450);
+                });
+            }
+
+            init() {
+                // Core Neural Sphere
+                const geo = new THREE.IcosahedronGeometry(8, 2);
+                const mat = new THREE.MeshBasicMaterial({
+                    color: 0x58a6ff,
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.15
+                });
+                this.core = new THREE.Mesh(geo, mat);
+                this.scene.add(this.core);
+
+                // Scanning Rings
+                this.rings = new THREE.Group();
+                for (let i = 0; i < 3; i++) {
+                    const rGeo = new THREE.TorusGeometry(12 + (i * 4), 0.05, 16, 100);
+                    const rMat = new THREE.MeshBasicMaterial({
+                        color: i === 0 ? 0x00d4ff : 0xa855f7,
+                        transparent: true,
+                        opacity: 0.2
+                    });
+                    const ring = new THREE.Mesh(rGeo, rMat);
+                    ring.rotation.x = Math.random() * Math.PI;
+                    ring.rotation.y = Math.random() * Math.PI;
+                    this.rings.add(ring);
+                }
+                this.scene.add(this.rings);
+
+                // Background Nebula
+                const pGeo = new THREE.BufferGeometry();
+                const pCount = 2000;
+                const pos = new Float32Array(pCount * 3);
+                for (let i = 0; i < pCount * 3; i++) pos[i] = (Math.random() - 0.5) * 100;
+                pGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                const pMat = new THREE.PointsMaterial({ color: 0x58a6ff, size: 0.05, transparent: true, opacity: 0.4 });
+                this.particles = new THREE.Points(pGeo, pMat);
+                this.scene.add(this.particles);
+            }
+
+            pulse() {
+                const tl = new THREE.Vector3(1.2, 1.2, 1.2);
+                this.core.scale.lerp(tl, 0.2);
+                setTimeout(() => this.core.scale.set(1, 1, 1), 100);
+            }
+
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                this.core.rotation.y += 0.002;
+                this.rings.children.forEach((r, i) => {
+                    r.rotation.z += 0.005 * (i + 1);
+                    r.rotation.x += 0.002;
+                });
+                this.particles.rotation.y += 0.0005;
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        const viz = new NeuralVisualizer();
+        let lastPacketCount = 0;
+
+        async function sync() {
+            try {
+                const res = await fetch(`${API_BASE}/stats`);
+                const data = await res.json();
+
+                document.getElementById('systemTime').textContent = data.system_time;
+                document.getElementById('packetsScanned').textContent = data.packets_scanned.toLocaleString();
+                document.getElementById('threatsBlocked').textContent = data.threats_blocked.toLocaleString();
+                document.getElementById('cpuVal').textContent = data.cpu_usage.toFixed(1) + '%';
+                document.getElementById('memInfo').textContent = data.memory_info;
+                document.getElementById('uptime').textContent = Math.floor(data.uptime_seconds / 60) + 'm';
+
+                // Gauges
+                const conf = (data.neural_confidence * 100);
+                document.getElementById('confidenceValue').textContent = conf.toFixed(1) + '%';
+                document.getElementById('confidenceBar').style.width = conf + '%';
+
+                const load = (data.network_load * 100);
+                document.getElementById('loadValue').textContent = load.toFixed(1) + '%';
+                document.getElementById('loadBar').style.width = load + '%';
+
+                if (data.packets_scanned > lastPacketCount) {
+                    viz.pulse();
+                    lastPacketCount = data.packets_scanned;
+                }
+
+                // Plugins
+                const reg = document.getElementById('pluginRegistry');
+                reg.innerHTML = Object.entries(data.plugins).map(([name, p]) => `
+                    <div class="plugin-card glass p-3 border border-white/5 rounded-xl">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-[10px] font-bold mono text-white">${name.toUpperCase()}</span>
+                            <div class="status-dot status-${p.status === 'active' ? 'active' : 'warning'}"></div>
+                        </div>
+                        <div class="h-0.5 bg-slate-800 w-full">
+                            <div class="h-full bg-cyan-400" style="width: ${p.health}%"></div>
+                        </div>
+                    </div>
+                `).join('');
+
+                // Logs
+                const logsRes = await fetch(`${API_BASE}/logs`);
+                const logs = await logsRes.json();
+                const container = document.getElementById('logsContainer');
+
+                const newContent = logs.map(l => {
+                    let borderColor = l.type === 'BLOCK' ? 'red' : 'green';
+                    let textColor = l.type === 'BLOCK' ? 'text-red-400' : 'text-green-400';
+                    let label = l.type;
+
+                    if (l.desc.includes('PHI_LEAK')) {
+                        borderColor = 'purple';
+                        textColor = 'text-purple-400';
+                        label = 'PHI LEAK';
+                    } else if (l.desc.includes('HONEYPOT_TRAP')) {
+                        borderColor = 'orange';
+                        textColor = 'text-orange-400';
+                        label = 'HONEY TRAP';
+                    }
+
+                    return `
+                        <div class="log-entry glass p-3 border-l-2 border-${borderColor}-500/50 hover:bg-white/5 transition-colors">
+                            <div class="flex justify-between items-center mb-1">
+                                <span class="text-[9px] font-bold mono ${textColor}">${label}</span>
+                                <span class="text-[9px] text-slate-500 mono">${l.time}</span>
+                            </div>
+                            <p class="text-[11px] text-slate-300 mono truncate mb-2">${l.desc.replace('PHI_LEAK', '').replace('HONEYPOT_TRAP', '')}</p>
+                            <div class="h-1 bg-slate-800 rounded-full overflow-hidden">
+                                <div class="h-full bg-${borderColor}-500 transition-all duration-500" style="width: ${l.score ? l.score * 100 : 50}%"></div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                if (container.innerHTML !== newContent) container.innerHTML = newContent;
+
+                document.getElementById('vCount').textContent = data.summary.verified;
+                document.getElementById('wCount').textContent = data.summary.warnings;
+                document.getElementById('bCount').textContent = data.summary.blocked;
+
+            } catch (e) {
+                console.error("Dashboard Sync Failed", e);
+                document.querySelector('.status-dot').className = 'status-dot status-alert';
+            }
+        }
+
+        document.getElementById('analyzeBtn').onclick = async () => {
+            const val = document.getElementById('analyzeInput').value;
+            if (!val) return;
+
+            const btn = document.getElementById('analyzeBtn');
+            btn.textContent = '...ING';
+
+            try {
+                const res = await fetch(`${API_BASE}/analyze`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ payload: val })
+                });
+                const data = await res.json();
+
+                const div = document.getElementById('analyzeResult');
+                div.classList.remove('hidden');
+                div.textContent = `JUDGMENT: ${data.judgment} | THREAT_SCORE: ${data.score.toFixed(4)}`;
+                div.className = `p-4 glass border border-${data.judgment === 'BLOCK' ? 'red' : 'green'}-500/20 text-${data.judgment === 'BLOCK' ? 'red' : 'green'}-400 mono text-xs mt-2`;
+
+                sync();
+            } catch (e) { }
+            btn.textContent = 'PROCESS';
+        };
+
+        setInterval(sync, 1500);
+        sync();
+    </script>
+</body>
+
+</html>

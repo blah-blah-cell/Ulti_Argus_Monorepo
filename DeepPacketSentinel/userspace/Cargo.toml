@@ -1,0 +1,24 @@
+[package]
+name = "userspace"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lru = "0.12"
+aya = "0.13"
+aya-log = "0.2"
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.34", features = ["full", "macros", "rt-multi-thread"] }
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.10"
+common = { path = "../common", features = ["user"] }
+crossbeam-channel = "0.5"
+libc = "0.2"
+bytes = "1.5"
+etherparse = "0.13"
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+async-trait = "0.1"
+base64 = "0.22"

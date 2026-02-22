@@ -1,0 +1,104 @@
+# Example configuration file for Aegis shield runtime service.
+#
+# Copy this file to /etc/argus_v/aegis.yaml and customize for your environment.
+# This configuration enables the complete Aegis runtime with Mnemosyne model integration,
+# Retina CSV polling, and blacklist enforcement with a 7-day dry-run period.
+
+# Model Management Configuration
+model:
+  # Local paths for storing downloaded models and scalers
+  model_local_path: "/var/lib/argus_v/models"
+  scaler_local_path: "/var/lib/argus_v/scalers"
+
+  # Model validation and caching
+  min_model_age_hours: 1
+  max_model_age_days: 30
+
+  # Fallback behavior when models are unavailable
+  use_fallback_model: true
+  fallback_prediction_threshold: 0.7
+
+  # Download timeouts
+  model_download_timeout: 300
+  scaler_download_timeout: 60
+
+# Retina CSV Polling Configuration
+polling:
+  poll_interval_seconds: 5
+  csv_directory: "/var/lib/argus_v/retina"
+  batch_size: 100
+  processed_file_suffix: ".processed"
+  max_poll_errors: 5
+  poll_retry_delay: 30
+
+# Prediction and Scoring Configuration
+prediction:
+  feature_columns:
+    - bytes_in
+    - bytes_out
+    - packets_in
+    - packets_out
+    - duration
+    - src_port
+    - dst_port
+    - protocol
+
+  anomaly_threshold: 0.7
+  high_risk_threshold: 0.9
+
+  max_flows_per_batch: 1000
+  prediction_timeout: 30
+
+  use_gpu: false
+  enable_parallel_processing: true
+  max_workers: 4
+
+# Blacklist Enforcement Configuration
+enforcement:
+  # Mandatory 7-day dry run by default
+  dry_run_duration_days: 7
+  enforce_after_dry_run: false
+
+  # iptables management
+  iptables_chain_name: "AEGIS-DROP"
+  iptables_table: "filter"
+  iptables_chain_position: 1
+
+  # Blacklist storage and management
+  blacklist_default_ttl_hours: 24
+  max_blacklist_entries: 10000
+  blacklist_cleanup_interval: 3600
+
+  # Emergency controls
+  emergency_stop_file: "/var/run/argus_v/aegis.emergency"
+  allow_manual_overrides: true
+
+# Runtime Service Configuration
+runtime:
+  log_level: "INFO"
+  state_file: "/var/lib/argus_v/aegis/state.json"
+  stats_file: "/var/lib/argus_v/aegis/stats.json"
+  pid_file: "/var/run/argus_v/aegis.pid"
+  health_check_port: 8080
+  shutdown_timeout: 30
+
+# Optional integrations toggles
+interfaces:
+  firebase:
+    enabled: false
+  github:
+    enabled: false
+
+# Firebase configuration (only required if interfaces.firebase.enabled: true)
+# firebase:
+#   project_id: "your-firebase-project-id"
+#   database_url: "https://your-project.firebaseio.com"
+#   api_key: "${FIREBASE_API_KEY}"
+#   request_timeout_seconds: 10
+#
+# GitHub configuration (only required if interfaces.github.enabled: true)
+# github:
+#   base_url: "https://api.github.com"
+#   token: "${GITHUB_TOKEN}"
+#   user_agent: "argus-v-aegis"
+#   request_timeout_seconds: 10

@@ -1,0 +1,57 @@
+# Sample Mnemosyne Configuration
+# Copy this file to mnemosyne-config.yaml and customize for your environment
+
+# Firebase Configuration
+firebase:
+  project_id: your-firebase-project-id
+  storage_bucket: your-project-id.appspot.com
+  service_account_path: ~/.config/gcloud/your-service-account.json
+  training_data_path: flows/training
+  model_output_path: models
+  cleanup_threshold_hours: 24
+  request_timeout_seconds: 30
+
+# Preprocessing Configuration
+preprocessing:
+  # Features to apply log transformation to
+  log_transform_features:
+    - bytes_in
+    - bytes_out
+    - packets_in
+    - packets_out
+    - duration
+  
+  # Feature normalization method: "standard" or "robust"
+  feature_normalization_method: standard
+  
+  # Enable automatic contamination parameter tuning
+  contamination_auto_tune: true
+  
+  # Range for contamination parameter (0.001 to 0.5)
+  contamination_range: [0.01, 0.1]
+  
+  # Minimum samples required for training
+  min_samples_for_training: 1000
+  
+  # Maximum model size in MB
+  max_model_size_mb: 100
+
+# Model Training Configuration
+training:
+  # Random seed for reproducibility
+  random_state: 42
+  
+  # Range for number of estimators
+  n_estimators_range: [50, 200]
+  
+  # Range for max_samples parameter
+  max_samples_range: [0.5, 1.0]
+  
+  # Bootstrap options to test
+  bootstrap_options: [true, false]
+  
+  # Validation split ratio
+  validation_split: 0.2
+  
+  # Cross-validation folds
+  cross_validation_folds: 3

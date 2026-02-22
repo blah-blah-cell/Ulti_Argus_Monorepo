@@ -1,0 +1,113 @@
+# Kronos Bridge — Implementation Plan (v2)
+
+## What We're Building Now
+
+A **trained meta-router (Kronos)** that sits between DPS (Rust/eBPF) and the existing IF + CNN models, intelligently deciding how to route every flow. Federated/NGO training is **out of scope** for now but hooks will be left in for later.
+
+---
+
+## The 4-Layer Pipeline
+
+```
+[NIC]
+  → Layer 0: DPS (Rust/eBPF) — kernel space, zero-copy ring buffer
+      Drops obvious junk at line rate, extracts payload + flow metadata
+      ↓ IPC (Unix socket / shared memory)
+  → Layer 1: Kronos (Python) — trained meta-router
+      Routes each flow to the right path
+      ↓
+  ┌──────────────────────────┐
+  │  CLEAR → fast pass       │
+  │  CRITICAL → block (IF)   │
+  │  GREY → escalate to CNN  │
+  └──────────────────────────┘
+  → Layer 2: IsolationForest — flow-level anomaly score
+  → Layer 3: CNN (PayloadClassifier) — grey zone deep inspection
+  → Aegis enforcement (iptables)
+```
+
+---
+
+## Kronos Design
+
+### What it learns to predict
+Three routing paths: **PASS** / **IF-only** / **Escalate-to-CNN**
+
+### Feature set Kronos trains on
+| Feature | Description |
+|---|---|
+| `if_score` | Raw IsolationForest decision score |
+| `ip_score_delta` | Difference from this IP's rolling mean score |
+| `ip_seen_before` | Boolean — is this IP in our history? |
+| `ip_flow_count` | Number of flows from this IP in history window |
+| `hour_of_day` | 0–23 |
+| `day_of_week` | 0–6 |
+| `inter_arrival_delta` | Deviation from IP's typical packet interval (heartbeat detection) |
+| `protocol` | Encoded: TCP/UDP/ICMP/OTHER |
+| `dst_port` | Destination port |
+| `payload_available` | Boolean — can CNN inspect this? |
+
+### Model type
+**Gradient Boosted Tree (scikit-learn `HistGradientBoostingClassifier`)** — fast at inference, handles mixed features, runs comfortably on Pi.
+
+### Training pipeline
+- **Ground truth labels:** IF + CNN combined verdicts on the same flows
+- **Trained by:** Mnemosyne (same weekly pipeline, new training target)
+- **Foundation:** Bootstrap with a synthetic rule-based dataset until real traffic accumulates
+- **Future hook:** `FederatedAggregator` stub in `kronos/hive.py` (not implemented yet)
+
+---
+
+## IP History Store
+- Lightweight in-memory dict: `{ip: {scores: deque, intervals: deque, last_seen: ts}}`
+- Window: **last 100 flows per IP** or **last 60 minutes**, whichever hits first
+- Persisted to disk on shutdown (pickle), reloaded on startup
+
+---
+
+## IPC: DPS (Rust) → Kronos (Python)
+
+DPS already has a zero-copy ring buffer. Two options:
+| Option | Notes |
+|---|---|
+| **Unix Domain Socket** | Simple, low-latency, already common in security tools |
+| **Shared Memory (mmap)** | Fastest, but more complex to manage safely |
+
+**Decision: Unix socket for now** — simpler to build, easy to swap for mmap later.
+
+DPS sends a JSON-lines or msgpack frame per flow:
+```json
+{"src_ip": "...", "dst_ip": "...", "src_port": 443, "dst_port": 52341,
+ "protocol": "TCP", "bytes_in": 1200, "bytes_out": 400, "duration": 0.3,
+ "payload": "<base64 or null>"}
+```
+
+---
+
+## Files to Create / Modify
+
+### New: `src/argus_v/kronos/`
+| File | Purpose |
+|---|---|
+| [__init__.py](file:///d:/Ulti_Argus/Ulti_argus/src/argus_v/__init__.py) | Module exports |
+| [router.py](file:///d:/Ulti_Argus/Ulti_argus/src/argus_v/kronos/router.py) | Kronos triage logic (zone assignment using trained model) |
+| `ip_history.py` | Per-IP rolling score + interval history store |
+| `temporal.py` | Time-of-day / heartbeat / boot-window context signals |
+| [trainer.py](file:///d:/Ulti_Argus/Ulti_argus/run_trainer.py) | Kronos model training (plugs into Mnemosyne pipeline) |
+| `ipc_listener.py` | Unix socket listener — receives flows from DPS |
+| `hive.py` | **Stub only** — future federated aggregation hook |
+
+### Modify: [aegis/prediction_engine.py](file:///d:/Ulti_Argus/Ulti_argus/src/argus_v/aegis/prediction_engine.py)
+- Accept flows from Kronos router instead of directly from CSV poller
+- Kronos becomes the new entry point for flow processing
+
+### Modify: [mnemosyne/pipeline.py](file:///d:/Ulti_Argus/Ulti_argus/src/argus_v/mnemosyne/pipeline.py)
+- Add Kronos training as a secondary training target alongside IF
+
+---
+
+## Verification Plan
+- Unit test each Kronos module independently
+- Integration test: simulate a flow through DPS → Kronos → IF → CNN pipeline
+- Train Kronos on synthetic data, verify routing decisions are sensible
+- Push both repos (Argus + DPS) to `blah-blah-cell` on GitHub

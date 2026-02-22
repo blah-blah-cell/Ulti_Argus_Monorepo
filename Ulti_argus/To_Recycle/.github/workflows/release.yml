@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate requirements.txt (pinned)
+        run: |
+          # requirements.txt is tracked in repo, but ensure it exists
+          test -f requirements.txt
+
+      - name: Build release tarball
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          OUTDIR="dist"
+          PKGNAME="argus_v-${VERSION}"
+
+          mkdir -p "$OUTDIR"
+
+          # Create a clean staging directory
+          rm -rf "/tmp/${PKGNAME}"
+          mkdir -p "/tmp/${PKGNAME}"
+
+          # Copy source code
+          cp -a src "/tmp/${PKGNAME}/src"
+
+          # Copy core docs and assets
+          cp -a README.md README.COMPLIANCE.md README.Docs "/tmp/${PKGNAME}/" || true
+          cp -a configs "/tmp/${PKGNAME}/" || true
+
+          # Copy sample configs
+          cp -a example-retina-config.yaml mnemosyne-config.example.yaml aegis-config.example.yaml "/tmp/${PKGNAME}/" || true
+
+          # Copy packaging essentials
+          cp -a pyproject.toml requirements.txt run_train.sh run_trainer.py install.sh uninstall.sh LICENSE "/tmp/${PKGNAME}/"
+
+          # Create tarball
+          tar -czf "$OUTDIR/${PKGNAME}.tar.gz" -C /tmp "${PKGNAME}"
+
+      - name: Generate SHA256 checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true

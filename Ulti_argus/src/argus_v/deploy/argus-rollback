@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+BASE_DIR="/opt/argus_v"
+RELEASES_DIR="${BASE_DIR}/releases"
+CURRENT_LINK="${BASE_DIR}/current"
+VENV_LINK="${BASE_DIR}/venv"
+
+CONFIG_FILE="/etc/argus_v/update.conf"
+LOG_FILE="/var/log/argus/updates.log"
+LOCK_FILE="/var/run/argus_v/argus-update.lock"
+
+DEFAULT_SERVICES="argus-retina argus-aegis"
+
+TARGET_VERSION=""
+
+log() {
+    local level="$1"
+    shift
+
+    local ts
+    ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+    mkdir -p "$(dirname "$LOG_FILE")" || true
+    echo "${ts} [${level}] $*" | tee -a "$LOG_FILE" >&2
+}
+
+info() { log "INFO" "$*"; }
+warn() { log "WARN" "$*"; }
+error() { log "ERROR" "$*"; }
+
+success() { log "SUCCESS" "$*"; }
+
+die() {
+    error "$*"
+    exit 1
+}
+
+require_root() {
+    if [[ ${EUID:-0} -ne 0 ]]; then
+        die "This command must be run as root"
+    fi
+}
+
+load_config() {
+    ARGUS_UPDATE_SERVICES="$DEFAULT_SERVICES"
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$CONFIG_FILE"
+    fi
+}
+
+acquire_lock() {
+    mkdir -p "$(dirname "$LOCK_FILE")" || true
+    exec 9>"$LOCK_FILE"
+
+    if ! flock -n 9; then
+        die "Another update/rollback is already in progress."
+    fi
+}
+
+list_running_services() {
+    local svc
+    for svc in $ARGUS_UPDATE_SERVICES; do
+        if systemctl is-active --quiet "${svc}.service" 2>/dev/null; then
+            echo "$svc"
+        fi
+    done
+}
+
+restart_services() {
+    local services=("$@")
+
+    if [[ ${#services[@]} -eq 0 ]]; then
+        warn "No running ARGUS services detected to restart"
+        return 0
+    fi
+
+    local svc
+    for svc in "${services[@]}"; do
+        info "Restarting ${svc}.service"
+        systemctl restart "${svc}.service"
+    done
+}
+
+wait_for_service_active() {
+    local svc="$1"
+    local timeout_seconds="${2:-30}"
+
+    local start
+    start=$(date +%s)
+
+    while true; do
+        if systemctl is-active --quiet "${svc}.service" 2>/dev/null; then
+            return 0
+        fi
+
+        if (( $(date +%s) - start >= timeout_seconds )); then
+            return 1
+        fi
+
+        sleep 1
+    done
+}
+
+health_check() {
+    local services=("$@")
+
+    if [[ ${#services[@]} -eq 0 ]]; then
+        warn "No running ARGUS services detected for health check"
+        return 0
+    fi
+
+    local svc
+    for svc in "${services[@]}"; do
+        if ! wait_for_service_active "$svc" 30; then
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+find_release_dir_for_version() {
+    local version="$1"
+    local normalized="$version"
+
+    if [[ "$normalized" != v* ]]; then
+        normalized="v${normalized}"
+    fi
+
+    local direct="${RELEASES_DIR}/argus_v-${normalized}"
+    if [[ -d "$direct" ]]; then
+        echo "$direct"
+        return 0
+    fi
+
+    # Search any release directory with a matching VERSION file
+    local match
+    match=$(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type f -name VERSION -print0 2>/dev/null \
+        | xargs -0 -I{} sh -c 'if [ "'""$normalized""'" = "'""$(cat "{}" 2>/dev/null)""'" ]; then dirname "{}"; fi' \
+        | head -n 1 || true)
+
+    if [[ -n "$match" ]]; then
+        echo "$match"
+        return 0
+    fi
+
+    return 1
+}
+
+find_previous_release_dir() {
+    local current_target=""
+    if [[ -L "$CURRENT_LINK" ]]; then
+        current_target=$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)
+    fi
+
+    # Order by mtime; first non-current is the rollback candidate.
+    find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr \
+        | awk '{print $2}' \
+        | while read -r d; do
+            if [[ -n "$current_target" ]] && [[ "$(readlink -f "$d" 2>/dev/null || true)" == "$current_target" ]]; then
+                continue
+            fi
+            echo "$d"
+            break
+        done
+}
+
+usage() {
+    cat <<EOF
+Usage: argus-rollback [version]
+
+Examples:
+  sudo argus-rollback          # rollback to previous release
+  sudo argus-rollback v0.1.0   # rollback to a specific release tag
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                TARGET_VERSION="$1"
+                shift
+                ;;
+        esac
+    done
+}
+
+main() {
+    parse_args "$@"
+
+    require_root
+    load_config
+    acquire_lock
+
+    if [[ ! -d "$RELEASES_DIR" ]]; then
+        die "No releases directory found at $RELEASES_DIR"
+    fi
+
+    local target
+    if [[ -n "$TARGET_VERSION" ]]; then
+        if ! target=$(find_release_dir_for_version "$TARGET_VERSION"); then
+            die "Release not found for version: $TARGET_VERSION"
+        fi
+    else
+        target=$(find_previous_release_dir)
+        if [[ -z "$target" ]]; then
+            die "No previous release found to roll back to"
+        fi
+    fi
+
+    local old_target
+    old_target=$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)
+
+    local expected_services=()
+    mapfile -t expected_services < <(list_running_services)
+
+    info "Rolling back to: $target"
+    ln -sfn "$target" "$CURRENT_LINK"
+    ln -sfn "${CURRENT_LINK}/venv" "$VENV_LINK"
+
+    systemctl daemon-reload || true
+    restart_services "${expected_services[@]}"
+
+    if ! health_check "${expected_services[@]}"; then
+        error "Rollback health check failed. Restoring previous active release."
+        if [[ -n "$old_target" ]]; then
+            ln -sfn "$old_target" "$CURRENT_LINK"
+            ln -sfn "${CURRENT_LINK}/venv" "$VENV_LINK"
+            systemctl daemon-reload || true
+            restart_services "${expected_services[@]}" || true
+            health_check "${expected_services[@]}" || true
+        fi
+        die "Rollback failed"
+    fi
+
+    success "Rollback completed"
+}
+
+main "$@"

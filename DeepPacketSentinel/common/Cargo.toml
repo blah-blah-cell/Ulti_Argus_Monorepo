@@ -1,0 +1,13 @@
+[package]
+name = "common"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aya = { version = "0.13", optional = true }
+aya-ebpf = { version = "0.1.0", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+user = ["dep:serde", "dep:aya"]
+ebpf = ["dep:aya-ebpf"]

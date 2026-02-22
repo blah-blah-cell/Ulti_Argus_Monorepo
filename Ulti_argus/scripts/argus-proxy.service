@@ -1,0 +1,19 @@
+[Unit]
+Description=Argus Aegis Proxy (Userspace Shield)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/argus
+Environment="PYTHONPATH=/opt/argus"
+# ExecStart launches mitmdump with our interceptor script in transparent mode
+# We assume the code is deployed to /opt/argus
+ExecStart=/opt/argus_env/bin/mitmdump -s src/aegis/proxy/interceptor.py --mode transparent --flow-detail 1
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/argus/proxy.log
+StandardError=append:/var/log/argus/proxy_error.log
+
+[Install]
+WantedBy=multi-user.target

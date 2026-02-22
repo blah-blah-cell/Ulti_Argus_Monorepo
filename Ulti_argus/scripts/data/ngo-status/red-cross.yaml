@@ -1,0 +1,38 @@
+# NGO Status File for Red Cross
+# Generated on 2024-12-18
+# This file tracks the compliance status of the NGO
+
+ngo_id: "red-cross"
+organization_name: "Red Cross Foundation"
+status: "active"
+license_type: "free_tier"
+compliance_score: 95
+last_compliance_check: "2024-12-18T15:00:00Z"
+next_compliance_check: "2024-12-25T15:00:00Z"
+
+# Compliance details
+compliance_details:
+  license_status: "active"
+  branch_access_compliant: true
+  data_retention_compliant: true
+  security_compliant: true
+  audit_trail_complete: true
+
+# Access control
+access_control:
+  current_access_level: "read"
+  access_granted_date: "2024-12-18T00:00:00Z"
+  access_expires_date: "2025-12-18T00:00:00Z"
+  renewal_required: false
+
+# Monitoring
+monitoring:
+  weekly_reports_enabled: true
+  compliance_checks_enabled: true
+  incident_reporting_enabled: true
+
+# Emergency contacts
+emergency_contacts:
+  primary: "compliance@redcross.org"
+  secondary: "emergency@redcross.org"
+  escalation: "director@redcross.org"

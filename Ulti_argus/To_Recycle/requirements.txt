@@ -1,0 +1,14 @@
+# Core
+scapy==2.5.0
+cryptography==41.0.3
+mitmproxy==10.0.0
+# AI/ML
+torch==2.1.0
+numpy==1.26.0
+pandas==2.1.1
+scikit-learn==1.3.1
+# System/eBPF
+# Note: bcc is usually installed via system package manager (apt install python3-bpfcc)
+# We list it here for reference, but it might not be installable via pip on Windows/Validation envs easily without setup.
+# On the actual RPi, we will use the system package.
+psutil==5.9.6

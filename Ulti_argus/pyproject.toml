@@ -1,0 +1,56 @@
+[project]
+name = "argus-v"
+version = "0.1.0"
+description = "Argus_V core scaffolding (oracle_core)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Argus_V" }]
+dependencies = [
+  "PyYAML>=6.0",
+  "scapy>=2.5.0",
+  "pcapy-ng>=1.0.5;python_version<'3.12'",
+  "pytz>=2023.3",
+  "firebase-admin>=6.2.0",
+  "pandas>=2.0.0",
+  "numpy>=1.24.0",
+  "scikit-learn>=1.3.0",
+  "joblib>=1.3.0",
+  "ruff>=0.4.0",
+  "torch>=2.0.0",
+  "torchvision>=0.15.0",
+]
+
+[project.scripts]
+argus-access = "argus_v.access_control.cli:main"
+argus-grant-access = "argus_v.access_control.cli:main_grant"
+argus-revoke-access = "argus_v.access_control.cli:main_revoke"
+argus-license = "argus_v.licensing.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-mock>=3.12.0",
+  "pytest-asyncio>=0.21.1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]

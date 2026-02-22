@@ -1,0 +1,283 @@
+name: Mnemosyne Weekly Training
+
+on:
+  schedule:
+    # Run every Monday at 02:00 UTC
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+    # Allow manual triggering
+    inputs:
+      force_training:
+        description: 'Force training even if insufficient data'
+        required: false
+        default: 'false'
+        type: boolean
+      max_age_hours:
+        description: 'Maximum age of training data to use (hours)'
+        required: false
+        default: '168'
+        type: string
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  validate-setup:
+    runs-on: ubuntu-latest
+    outputs:
+      setup-valid: ${{ steps.validate.outputs.setup-valid }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[dev]
+
+    - name: Validate mnemosyne setup
+      id: validate
+      env:
+        MNEMOSYNE_CONFIG_PATH: ${{ vars.MNEMOSYNE_CONFIG_PATH }}
+        FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+        FIREBASE_STORAGE_BUCKET: ${{ vars.FIREBASE_STORAGE_BUCKET }}
+        SERVICE_ACCOUNT_PATH: ${{ secrets.SERVICE_ACCOUNT_PATH }}
+      run: |
+        # Validate configuration file exists
+        if [ ! -f "$MNEMOSYNE_CONFIG_PATH" ]; then
+          echo "setup-valid=false" >> $GITHUB_OUTPUT
+          echo "❌ Configuration file not found: $MNEMOSYNE_CONFIG_PATH"
+          exit 1
+        fi
+        
+        # Validate required secrets are available
+        if [ -z "$FIREBASE_PROJECT_ID" ] || [ -z "$FIREBASE_STORAGE_BUCKET" ]; then
+          echo "setup-valid=false" >> $GITHUB_OUTPUT
+          echo "❌ Missing required Firebase configuration variables"
+          exit 1
+        fi
+        
+        echo "setup-valid=true" >> $GITHUB_OUTPUT
+        echo "✅ Setup validation passed"
+
+  check-data-availability:
+    needs: validate-setup
+    runs-on: ubuntu-latest
+    if: needs.validate-setup.outputs.setup-valid == 'true'
+    outputs:
+      has-sufficient-data: ${{ steps.check-data.outputs.has-sufficient-data }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[dev]
+
+    - name: Check data availability
+      id: check-data
+      env:
+        MNEMOSYNE_CONFIG_PATH: ${{ vars.MNEMOSYNE_CONFIG_PATH }}
+        GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.SERVICE_ACCOUNT_PATH }}
+      run: |
+        python -c "
+        import sys
+        sys.path.insert(0, 'src')
+        
+        from argus_v.mnemosyne.config import load_mnemosyne_config
+        from argus_v.mnemosyne.pipeline import MnemosynePipeline
+        
+        # Load configuration
+        config = load_mnemosyne_config('$MNEMOSYNE_CONFIG_PATH')
+        
+        # Check data availability
+        with MnemosynePipeline(config) as pipeline:
+            try:
+                files = pipeline._data_loader.list_training_csvs(max_age_hours=168)
+                if len(files) > 0:
+                    print(f'✅ Found {len(files)} training data files')
+                    print(f'has-sufficient-data=true' >> $GITHUB_OUTPUT)
+                else:
+                    print('⚠️ No training data files found')
+                    print(f'has-sufficient-data=false' >> $GITHUB_OUTPUT)
+            except Exception as e:
+                print(f'❌ Data availability check failed: {e}')
+                print(f'has-sufficient-data=false' >> $GITHUB_OUTPUT)
+        "
+
+  train-model:
+    needs: [validate-setup, check-data-availability]
+    runs-on: ubuntu-latest
+    if: |
+      needs.validate-setup.outputs.setup-valid == 'true' && 
+      (needs.check-data-availability.outputs.has-sufficient-data == 'true' || github.event.inputs.force_training == 'true')
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[dev]
+
+    - name: Run mnemosyne training pipeline
+      env:
+        MNEMOSYNE_CONFIG_PATH: ${{ vars.MNEMOSYNE_CONFIG_PATH }}
+        GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.SERVICE_ACCOUNT_PATH }}
+        MAX_AGE_HOURS: ${{ github.event.inputs.max_age_hours || '168' }}
+      run: |
+        python -c "
+        import sys
+        sys.path.insert(0, 'src')
+        
+        from argus_v.mnemosyne.config import load_mnemosyne_config
+        from argus_v.mnemosyne.pipeline import MnemosynePipeline
+        import json
+        
+        # Load configuration
+        config = load_mnemosyne_config('$MNEMOSYNE_CONFIG_PATH')
+        
+        # Run training pipeline
+        with MnemosynePipeline(config) as pipeline:
+            max_age_hours = int('$MAX_AGE_HOURS')
+            stats = pipeline.run_training_pipeline(max_training_data_age_hours=max_age_hours)
+            
+            # Save training stats for notification
+            with open('training_stats.json', 'w') as f:
+                json.dump(stats, f, indent=2, default=str)
+            
+            print('🎉 Training pipeline completed successfully!')
+            print(f'Training samples: {stats.get(\"training\", {}).get(\"training_samples\", \"N/A\")}')
+            print(f'Execution time: {stats.get(\"execution_time_seconds\", 0):.1f} seconds')
+            print(f'Artifacts uploaded: {len(stats.get(\"artifact_management\", {}).get(\"upload\", {}).get(\"uploaded_files\", {}))}')
+        "
+
+    - name: Upload training artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: training-stats-${{ github.run_number }}
+        path: training_stats.json
+        retention-days: 30
+
+    - name: Notify success
+      if: always()
+      run: |
+        echo "🎉 Mnemosyne training pipeline completed successfully!"
+        echo "📊 Training artifacts have been uploaded to Firebase Storage"
+        echo "🔄 Model is ready for deployment"
+
+  notify-failure:
+    needs: [validate-setup, check-data-availability, train-model]
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+    - name: Notify training failure
+      run: |
+        echo "❌ Mnemosyne training pipeline failed"
+        echo "🔍 Please check the workflow logs for details"
+        echo "📧 Manual intervention may be required"
+
+  # Cleanup job for insufficient data
+  insufficient-data:
+    needs: [validate-setup, check-data-availability]
+    runs-on: ubuntu-latest
+    if: |
+      needs.validate-setup.outputs.setup-valid == 'true' && 
+      needs.check-data-availability.outputs.has-sufficient-data == 'false' &&
+      github.event.inputs.force_training != 'true'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[dev]
+
+    - name: Attempt data cleanup and retry
+      env:
+        MNEMOSYNE_CONFIG_PATH: ${{ vars.MNEMOSYNE_CONFIG_PATH }}
+        GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.SERVICE_ACCOUNT_PATH }}
+      run: |
+        echo "⚠️ Insufficient training data found"
+        echo "🧹 Attempting to clean up old data and retry..."
+        
+        python -c "
+        import sys
+        sys.path.insert(0, 'src')
+        
+        from argus_v.mnemosyne.config import load_mnemosyne_config
+        from argus_v.mnemosyne.pipeline import MnemosynePipeline
+        
+        # Load configuration
+        config = load_mnemosyne_config('$MNEMOSYNE_CONFIG_PATH')
+        
+        # Clean up old data
+        with MnemosynePipeline(config) as pipeline:
+            cleanup_stats = pipeline._data_loader.delete_old_training_data(168)  # Clean files older than 1 week
+            print(f'Cleaned up {cleanup_stats[\"deleted_count\"]} old files')
+            
+            # Check again for data
+            files = pipeline._data_loader.list_training_csvs(max_age_hours=168)
+            if len(files) == 0:
+                print('❌ Still no training data available after cleanup')
+                print('💡 Please ensure new flow data is being generated and uploaded')
+                exit(1)
+            else:
+                print(f'✅ Found {len(files)} training files after cleanup')
+        "
+
+    - name: Run training after cleanup
+      env:
+        MNEMOSYNE_CONFIG_PATH: ${{ vars.MNEMOSYNE_CONFIG_PATH }}
+        GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.SERVICE_ACCOUNT_PATH }}
+      run: |
+        python -c "
+        import sys
+        sys.path.insert(0, 'src')
+        
+        from argus_v.mnemosyne.config import load_mnemosyne_config
+        from argus_v.mnemosyne.pipeline import MnemosynePipeline
+        import json
+        
+        # Load configuration
+        config = load_mnemosyne_config('$MNEMOSYNE_CONFIG_PATH')
+        
+        # Run training pipeline
+        with MnemosynePipeline(config) as pipeline:
+            stats = pipeline.run_training_pipeline(max_training_data_age_hours=168)
+            
+            # Save training stats
+            with open('training_stats_after_cleanup.json', 'w') as f:
+                json.dump(stats, f, indent=2, default=str)
+            
+            print('🎉 Training pipeline completed after cleanup!')
+        "
+
+    - name: Upload training artifacts after cleanup
+      uses: actions/upload-artifact@v4
+      with:
+        name: training-stats-after-cleanup-${{ github.run_number }}
+        path: training_stats_after_cleanup.json
+        retention-days: 30

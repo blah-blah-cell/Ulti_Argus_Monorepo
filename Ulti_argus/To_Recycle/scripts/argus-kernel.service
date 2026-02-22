@@ -1,0 +1,19 @@
+[Unit]
+Description=Argus Aegis Kernel Loader (eBPF XDP)
+After=network.target argus-proxy.service
+# We want the proxy up before we start shunting traffic to it (though XDP might just pass if userspace is down)
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/argus
+Environment="PYTHONPATH=/opt/argus"
+# Default interface wlan0. In a real deploy script, this might be sed-replaced.
+ExecStart=/opt/argus_env/bin/python src/aegis/core/loader.py --interface wlan0
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/argus/kernel.log
+StandardError=append:/var/log/argus/kernel_error.log
+
+[Install]
+WantedBy=multi-user.target

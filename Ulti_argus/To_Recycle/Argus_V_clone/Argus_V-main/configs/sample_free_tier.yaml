@@ -1,0 +1,36 @@
+# Argus_V sample configuration (Firebase + GitHub free-tier oriented)
+
+sampling:
+  # Base sampling window used by collectors
+  window_seconds: 300
+  # Rounding used by anonymization / aggregation
+  timestamp_round_seconds: 60
+
+runtime:
+  dry_run: true
+  log_level: INFO
+
+interfaces:
+  github:
+    enabled: true
+  firebase:
+    enabled: true
+
+# GitHub configuration (recommended: use a fine-grained PAT via env var)
+github:
+  base_url: "https://api.github.com"
+  token: "${GITHUB_TOKEN}"
+  user_agent: "argus-v/0.1 (free-tier)"
+  request_timeout_seconds: 10
+
+# Firebase configuration (free-tier friendly; avoid shipping service accounts to edge devices)
+firebase:
+  project_id: "your-project-id"
+  database_url: "https://your-project-id-default-rtdb.firebaseio.com"
+  api_key: "${FIREBASE_API_KEY}"
+  request_timeout_seconds: 10
+
+blacklist:
+  sync_cadence_seconds: 3600
+  sources:
+    - "https://example.com/argus_v/blacklist.txt"
