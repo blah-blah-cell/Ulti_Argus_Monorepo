@@ -25,6 +25,7 @@ except ImportError:
     FIREBASE_AVAILABLE = False
 
 from ..oracle_core import HashAnonymizer
+from ..oracle_core.config import require_safe_name
 from ..oracle_core.logging import log_event
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,10 @@ class BlacklistManager:
             anonymizer: Optional hash anonymizer for IP anonymization
         """
         self.config = config
+
+        # Validate iptables configuration
+        require_safe_name(config.iptables_chain_name, path="config.iptables_chain_name")
+        require_safe_name(config.iptables_table, path="config.iptables_table")
         
         # Paths are loaded from config (which supports env var overrides)
         self._sqlite_db_path = Path(config.blacklist_db_path)

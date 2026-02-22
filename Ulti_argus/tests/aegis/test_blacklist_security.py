@@ -13,6 +13,8 @@ class TestBlacklistSecurity:
         config = MagicMock(spec=EnforcementConfig)
         config.blacklist_db_path = "/tmp/test.db"
         config.blacklist_json_path = "/tmp/test.json"
+        config.iptables_chain_name = "AEGIS-DROP"
+        config.iptables_table = "filter"
 
         # Simulate config where anonymization_salt attribute is missing or None
         # Since MagicMock will create a Mock object for any attribute access by default,
@@ -29,6 +31,8 @@ class TestBlacklistSecurity:
         config = MagicMock(spec=EnforcementConfig)
         config.blacklist_db_path = "/tmp/test.db"
         config.blacklist_json_path = "/tmp/test.json"
+        config.iptables_chain_name = "AEGIS-DROP"
+        config.iptables_table = "filter"
         config.anonymization_salt = "secure-test-salt"
         config.firebase_sync_enabled = False
 
@@ -51,7 +55,9 @@ class TestBlacklistSecurity:
             "blacklist_db_path": "/tmp/db",
             "blacklist_json_path": "/tmp/json",
             "feedback_dir": "/tmp/feedback",
-            "retrain_flag_file": "/tmp/retrain"
+            "retrain_flag_file": "/tmp/retrain",
+            "iptables_chain_name": "AEGIS-DROP",
+            "iptables_table": "filter"
         }
 
         # Should fail validation without salt

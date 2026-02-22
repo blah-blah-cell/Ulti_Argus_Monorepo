@@ -25,6 +25,7 @@ from ..oracle_core.config import (
     get_optional,
     require_non_empty_str,
     require_positive_int,
+    require_safe_name,
 )
 
 
@@ -335,12 +336,12 @@ class EnforcementConfig:
             path=f"{path}.enforce_after_dry_run"
         )
         
-        iptables_chain_name = require_non_empty_str(
+        iptables_chain_name = require_safe_name(
             get_optional(data, "iptables_chain_name", "AEGIS-DROP"),
             path=f"{path}.iptables_chain_name"
         )
         
-        iptables_table = require_non_empty_str(
+        iptables_table = require_safe_name(
             get_optional(data, "iptables_table", "filter"),
             path=f"{path}.iptables_table"
         )
