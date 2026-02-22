@@ -8,6 +8,7 @@ and emergency controls.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import logging
 import os
@@ -17,7 +18,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import yaml
+
 from ..oracle_core.logging import configure_logging
+from ..oracle_core.config import ValidationError
 from .config import load_aegis_config
 from .daemon import AegisDaemon
 
@@ -400,18 +404,36 @@ Examples:
             
         Returns:
             Initialized AegisDaemon instance
+
+        Raises:
+            FileNotFoundError: If configuration file not found
+            PermissionError: If configuration file not readable
+            ValueError: If configuration is invalid
+            RuntimeError: If daemon initialization fails
         """
         try:
-            # Validate config file exists
-            if not Path(config_path).exists():
+            path = Path(config_path)
+
+            # Validate config file exists and is a file
+            if not path.exists():
                 raise FileNotFoundError(f"Configuration file not found: {config_path}")
+            if not path.is_file():
+                raise IsADirectoryError(f"Configuration path is a directory: {config_path}")
+
+            # Check read permissions
+            if not os.access(path, os.R_OK):
+                raise PermissionError(f"Configuration file not readable: {config_path}")
             
             # Load daemon (but don't start it yet)
             daemon = AegisDaemon(config_path)
             return daemon
             
+        except (FileNotFoundError, PermissionError, IsADirectoryError):
+            raise
+        except (ValidationError, yaml.YAMLError) as e:
+            raise ValueError(f"Invalid configuration: {e}") from e
         except Exception as e:
-            raise Exception(f"Failed to load daemon: {e}")
+            raise RuntimeError(f"Failed to load daemon: {e}") from e
     
     def _cmd_start(self, args) -> int:
         """Start daemon command.
@@ -425,36 +447,65 @@ Examples:
         print(f"Starting Aegis daemon with config: {args.config}")
         
         try:
-            daemon = self._load_daemon(args.config)
+            aegis_daemon = self._load_daemon(args.config)
             
             # Set PID file from config or command line
-            pid_file = args.pid_file or daemon.config.pid_file
+            pid_file = args.pid_file or aegis_daemon.config.pid_file
             
             if args.daemon:
+                # Check for python-daemon dependency
+                try:
+                    import daemon
+                    from daemon import pidfile
+                except ImportError:
+                    print("Error: 'python-daemon' package is required for daemon mode.", file=sys.stderr)
+                    print("Install it with: pip install python-daemon", file=sys.stderr)
+                    return 1
+
                 # Daemon mode - check if already running
                 if self._is_process_running(pid_file):
-                    print("Daemon is already running")
+                    print(f"Daemon is already running (PID file: {pid_file})")
                     return 0
                 
-                # Start as daemon
-                import daemon
-                import daemon.pidfile
+                try:
+                    # Ensure PID file directory exists
+                    pid_path = Path(pid_file)
+                    if not pid_path.parent.exists():
+                        pid_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    # Define signal handler wrapper
+                    def signal_handler(signum, frame):
+                        aegis_daemon.stop()
+                        sys.exit(0)
+
+                    context = daemon.DaemonContext(
+                        pidfile=pidfile.PIDLockFile(pid_file),
+                        signal_map={
+                            signal.SIGTERM: signal_handler,
+                            signal.SIGINT: signal_handler,
+                        },
+                        detach_process=True
+                    )
+                except (OSError, IOError) as e:
+                    print(f"Error setting up daemon context: {e}", file=sys.stderr)
+                    return 1
                 
-                with daemon.DaemonContext(
-                    pidfile=daemon.pidfile.PIDLockFile(pid_file),
-                    signal_map={
-                        signal.SIGTERM: daemon.shutdown_requested,
-                        signal.SIGINT: daemon.shutdown_requested,
-                    }
-                ):
-                    daemon.start()
-                    
-                    # Keep daemon running
-                    while daemon._running:
-                        time.sleep(1)
+                try:
+                    with context:
+                        if not aegis_daemon.start():
+                             print("Failed to start daemon service inside context", file=sys.stderr)
+                             sys.exit(1)
+
+                        # Keep daemon running
+                        while aegis_daemon._running:
+                            time.sleep(1)
+                except Exception as e:
+                    print(f"Daemon process failed: {e}", file=sys.stderr)
+                    return 1
+
             else:
                 # Foreground mode
-                if not daemon.start():
+                if not aegis_daemon.start():
                     print("Failed to start daemon")
                     return 1
                 
@@ -462,18 +513,21 @@ Examples:
                 print("Press Ctrl+C to stop...")
                 
                 try:
-                    while daemon._running:
+                    while aegis_daemon._running:
                         time.sleep(1)
                 except KeyboardInterrupt:
                     print("\\nShutting down...")
-                    daemon.stop()
+                    aegis_daemon.stop()
                 finally:
                     print("Daemon stopped")
             
             return 0
             
+        except (FileNotFoundError, PermissionError, IsADirectoryError, ValueError) as e:
+             print(f"Configuration error: {e}", file=sys.stderr)
+             return 1
         except Exception as e:
-            print(f"Failed to start daemon: {e}")
+            print(f"Failed to start daemon: {e}", file=sys.stderr)
             return 1
     
     def _cmd_stop(self, args) -> int:
@@ -489,42 +543,68 @@ Examples:
         
         try:
             daemon = self._load_daemon(args.config)
+            pid_file = daemon.config.pid_file
+            pid = None
             
             # Try graceful stop first
             if not args.force:
-                # Check if PID file exists and try to stop gracefully
-                pid_file = daemon.config.pid_file
                 if Path(pid_file).exists():
                     try:
                         with open(pid_file, 'r') as f:
-                            pid = int(f.read().strip())
+                            content = f.read().strip()
+                            if content:
+                                pid = int(content)
+                            else:
+                                print(f"Warning: PID file is empty: {pid_file}", file=sys.stderr)
+                                Path(pid_file).unlink(missing_ok=True)
+                                return 0
                         
                         # Send SIGTERM
-                        os.kill(pid, signal.SIGTERM)
-                        print(f"Sent stop signal to process {pid}")
+                        try:
+                            os.kill(pid, signal.SIGTERM)
+                            print(f"Sent stop signal to process {pid}")
+                        except ProcessLookupError:
+                            print(f"Process {pid} not found. Cleaning up PID file.")
+                            Path(pid_file).unlink(missing_ok=True)
+                            return 0
+                        except PermissionError:
+                            print(f"Error: No permission to stop process {pid}", file=sys.stderr)
+                            return 1
                         
                         # Wait for graceful shutdown
-                        for i in range(args.timeout):
+                        start_time = time.time()
+                        while time.time() - start_time < args.timeout:
                             try:
                                 os.kill(pid, 0)  # Check if process exists
-                                time.sleep(1)
-                            except OSError:
+                                time.sleep(0.5)
+                            except ProcessLookupError:
                                 print("Daemon stopped successfully")
+                                if Path(pid_file).exists():
+                                    Path(pid_file).unlink(missing_ok=True)
                                 return 0
+                            except PermissionError:
+                                # Process exists but we can't check it? Wait timeout then force kill?
+                                # If we can't check it, we probably can't kill it either.
+                                pass
                         
                         print("Graceful shutdown timeout, forcing stop...")
                         
-                    except (ValueError, OSError, FileNotFoundError):
-                        pass
+                    except ValueError:
+                        print(f"Error: Invalid PID file content in {pid_file}", file=sys.stderr)
+                    except OSError as e:
+                        print(f"Error during stop operation: {e}", file=sys.stderr)
+                else:
+                    print(f"PID file not found: {pid_file}")
+                    return 0
             
             # Force stop
-            if args.force:
-                self._force_stop_daemon(daemon.config.pid_file)
+            if args.force or (pid and self._is_process_running(pid_file)):
+                self._force_stop_daemon(pid_file)
             
             return 0
             
         except Exception as e:
-            print(f"Failed to stop daemon: {e}")
+            print(f"Failed to stop daemon: {e}", file=sys.stderr)
             return 1
     
     def _cmd_status(self, args) -> int:
@@ -547,8 +627,11 @@ Examples:
             
             return 0
             
+        except (OSError, IOError) as e:
+             print(f"System error retrieving status: {e}", file=sys.stderr)
+             return 1
         except Exception as e:
-            print(f"Failed to get status: {e}")
+            print(f"Failed to get status: {e}", file=sys.stderr)
             return 1
     
     def _cmd_health(self, args) -> int:
@@ -571,8 +654,11 @@ Examples:
             
             return 0
             
+        except (OSError, IOError) as e:
+             print(f"System error retrieving health status: {e}", file=sys.stderr)
+             return 1
         except Exception as e:
-            print(f"Failed to get health status: {e}")
+            print(f"Failed to get health status: {e}", file=sys.stderr)
             return 1
     
     def _cmd_validate(self, args) -> int:
@@ -615,16 +701,25 @@ Examples:
             ]
             
             for dir_path in required_dirs:
-                if dir_path.exists() and dir_path.is_dir():
-                    print(f"  ✓ Directory exists: {dir_path}")
-                else:
-                    print(f"  ⚠ Directory missing: {dir_path}")
+                try:
+                    if dir_path.exists() and dir_path.is_dir():
+                        print(f"  ✓ Directory exists: {dir_path}")
+                    else:
+                        print(f"  ⚠ Directory missing: {dir_path}")
+                except PermissionError:
+                     print(f"  ✗ Permission denied checking directory: {dir_path}")
             
             print("\\nConfiguration validation completed successfully")
             return 0
             
+        except (ValidationError, yaml.YAMLError, ValueError) as e:
+            print(f"Configuration validation failed: {e}", file=sys.stderr)
+            return 1
+        except (OSError, IOError) as e:
+            print(f"System error during validation: {e}", file=sys.stderr)
+            return 1
         except Exception as e:
-            print(f"Configuration validation failed: {e}")
+            print(f"Unexpected error during validation: {e}", file=sys.stderr)
             return 1
     
     def _cmd_test(self, args) -> int:
@@ -644,75 +739,84 @@ Examples:
             # Test model loading
             if args.model_load or not any([args.csv, args.blacklist]):
                 print("\\n=== Model Loading Test ===")
-                if daemon._components.get('model_manager'):
-                    model_manager = daemon._components['model_manager']
-                    success = model_manager.load_latest_model()
-                    if success:
-                        print("✓ Model loaded successfully")
-                        info = model_manager.get_model_info()
-                        print(f"  Model type: {info.get('model_type')}")
-                        print(f"  Scaler type: {info.get('scaler_type')}")
+                try:
+                    if daemon._components.get('model_manager'):
+                        model_manager = daemon._components['model_manager']
+                        success = model_manager.load_latest_model()
+                        if success:
+                            print("✓ Model loaded successfully")
+                            info = model_manager.get_model_info()
+                            print(f"  Model type: {info.get('model_type')}")
+                            print(f"  Scaler type: {info.get('scaler_type')}")
+                        else:
+                            print("✗ Model loading failed")
                     else:
-                        print("✗ Model loading failed")
-                else:
-                    print("✗ Model manager not initialized")
+                        print("✗ Model manager not initialized")
+                except Exception as e:
+                    print(f"✗ Error testing model loading: {e}", file=sys.stderr)
             
             # Test blacklist operations
             if args.blacklist or not any([args.csv, args.model_load]):
                 print("\\n=== Blacklist Test ===")
-                if daemon._components.get('blacklist_manager'):
-                    blacklist_manager = daemon._components['blacklist_manager']
-                    
-                    # Test add
-                    test_ip = "192.168.1.100"
-                    success = blacklist_manager.add_to_blacklist(
-                        test_ip, 
-                        "Test entry", 
-                        risk_level="low"
-                    )
-                    if success:
-                        print(f"✓ Added {test_ip} to blacklist")
+                try:
+                    if daemon._components.get('blacklist_manager'):
+                        blacklist_manager = daemon._components['blacklist_manager']
                         
-                        # Test lookup
-                        is_blacklisted = blacklist_manager.is_blacklisted(test_ip)
-                        if is_blacklisted:
-                            print(f"✓ Found {test_ip} in blacklist")
-                        else:
-                            print(f"✗ Could not find {test_ip} in blacklist")
-                        
-                        # Test remove
-                        success = blacklist_manager.remove_from_blacklist(test_ip)
+                        # Test add
+                        test_ip = "192.168.1.100"
+                        success = blacklist_manager.add_to_blacklist(
+                            test_ip,
+                            "Test entry",
+                            risk_level="low"
+                        )
                         if success:
-                            print(f"✓ Removed {test_ip} from blacklist")
+                            print(f"✓ Added {test_ip} to blacklist")
+
+                            # Test lookup
+                            is_blacklisted = blacklist_manager.is_blacklisted(test_ip)
+                            if is_blacklisted:
+                                print(f"✓ Found {test_ip} in blacklist")
+                            else:
+                                print(f"✗ Could not find {test_ip} in blacklist")
+
+                            # Test remove
+                            success = blacklist_manager.remove_from_blacklist(test_ip)
+                            if success:
+                                print(f"✓ Removed {test_ip} from blacklist")
+                            else:
+                                print(f"✗ Could not remove {test_ip} from blacklist")
                         else:
-                            print(f"✗ Could not remove {test_ip} from blacklist")
+                            print("✗ Failed to add test entry to blacklist")
                     else:
-                        print("✗ Failed to add test entry to blacklist")
-                else:
-                    print("✗ Blacklist manager not initialized")
+                        print("✗ Blacklist manager not initialized")
+                except Exception as e:
+                    print(f"✗ Error testing blacklist operations: {e}", file=sys.stderr)
             
             # Test CSV prediction
             if args.csv:
                 print("\\n=== CSV Prediction Test ===")
-                csv_path = Path(args.csv)
-                if csv_path.exists():
-                    print(f"Testing with CSV: {csv_path}")
-                    
-                    if daemon._components.get('prediction_engine'):
-                        prediction_engine = daemon._components['prediction_engine']
-                        success = prediction_engine.force_process_file(csv_path)
-                        if success:
-                            print("✓ CSV processing completed")
-                            stats = prediction_engine.get_statistics()
-                            print(f"  Flows processed: {stats.get('total_flows_processed', 0)}")
-                            print(f"  Predictions made: {stats.get('total_predictions_made', 0)}")
-                            print(f"  Anomalies detected: {stats.get('anomalies_detected', 0)}")
+                try:
+                    csv_path = Path(args.csv)
+                    if csv_path.exists():
+                        print(f"Testing with CSV: {csv_path}")
+
+                        if daemon._components.get('prediction_engine'):
+                            prediction_engine = daemon._components['prediction_engine']
+                            success = prediction_engine.force_process_file(csv_path)
+                            if success:
+                                print("✓ CSV processing completed")
+                                stats = prediction_engine.get_statistics()
+                                print(f"  Flows processed: {stats.get('total_flows_processed', 0)}")
+                                print(f"  Predictions made: {stats.get('total_predictions_made', 0)}")
+                                print(f"  Anomalies detected: {stats.get('anomalies_detected', 0)}")
+                            else:
+                                print("✗ CSV processing failed")
                         else:
-                            print("✗ CSV processing failed")
+                            print("✗ Prediction engine not initialized")
                     else:
-                        print("✗ Prediction engine not initialized")
-                else:
-                    print(f"✗ CSV file not found: {csv_path}")
+                        print(f"✗ CSV file not found: {csv_path}")
+                except Exception as e:
+                    print(f"✗ Error testing CSV prediction: {e}", file=sys.stderr)
             
             print("\\n=== Test Summary ===")
             print("All requested tests completed")
@@ -720,7 +824,7 @@ Examples:
             return 0
             
         except Exception as e:
-            print(f"Test failed: {e}")
+            print(f"Test initialization failed: {e}", file=sys.stderr)
             return 1
     
     def _cmd_emergency_stop(self, args) -> int:
@@ -746,7 +850,7 @@ Examples:
                 return 1
                 
         except Exception as e:
-            print(f"Emergency stop failed: {e}")
+            print(f"Emergency stop failed: {e}", file=sys.stderr)
             return 1
     
     def _cmd_emergency_restore(self, args) -> int:
@@ -772,7 +876,7 @@ Examples:
                 return 1
                 
         except Exception as e:
-            print(f"Emergency restore failed: {e}")
+            print(f"Emergency restore failed: {e}", file=sys.stderr)
             return 1
     
     def _cmd_stats(self, args) -> int:
@@ -795,8 +899,11 @@ Examples:
             
             return 0
             
+        except (OSError, IOError) as e:
+             print(f"System error retrieving statistics: {e}", file=sys.stderr)
+             return 1
         except Exception as e:
-            print(f"Failed to get statistics: {e}")
+            print(f"Failed to get statistics: {e}", file=sys.stderr)
             return 1
     
     def _cmd_model(self, args) -> int:
@@ -819,12 +926,16 @@ Examples:
                 print("Loading latest model...")
                 if daemon._components.get('model_manager'):
                     model_manager = daemon._components['model_manager']
-                    success = model_manager.load_latest_model()
-                    if success:
-                        print("✓ Model loaded successfully")
-                    else:
-                        print("✗ Model loading failed")
-                        return 1
+                    try:
+                        success = model_manager.load_latest_model()
+                        if success:
+                            print("✓ Model loaded successfully")
+                        else:
+                            print("✗ Model loading failed")
+                            return 1
+                    except Exception as e:
+                         print(f"✗ Error loading model: {e}", file=sys.stderr)
+                         return 1
                 else:
                     print("✗ Model manager not initialized")
                     return 1
@@ -833,14 +944,18 @@ Examples:
                 print("Model information:")
                 if daemon._components.get('model_manager'):
                     model_manager = daemon._components['model_manager']
-                    info = model_manager.get_model_info()
-                    
-                    print(f"  Model available: {info.get('model_available', False)}")
-                    print(f"  Model type: {info.get('model_type', 'None')}")
-                    print(f"  Scaler type: {info.get('scaler_type', 'None')}")
-                    print(f"  Last load: {info.get('last_load_time', 'Never')}")
-                    print(f"  Load failures: {info.get('load_failures', 0)}")
-                    print(f"  Fallback in use: {info.get('fallback_in_use', False)}")
+                    try:
+                        info = model_manager.get_model_info()
+
+                        print(f"  Model available: {info.get('model_available', False)}")
+                        print(f"  Model type: {info.get('model_type', 'None')}")
+                        print(f"  Scaler type: {info.get('scaler_type', 'None')}")
+                        print(f"  Last load: {info.get('last_load_time', 'Never')}")
+                        print(f"  Load failures: {info.get('load_failures', 0)}")
+                        print(f"  Fallback in use: {info.get('fallback_in_use', False)}")
+                    except Exception as e:
+                        print(f"✗ Error retrieving model info: {e}", file=sys.stderr)
+                        return 1
                 else:
                     print("✗ Model manager not initialized")
                     return 1
@@ -848,7 +963,7 @@ Examples:
             return 0
             
         except Exception as e:
-            print(f"Model command failed: {e}")
+            print(f"Model command failed: {e}", file=sys.stderr)
             return 1
     
     def _cmd_blacklist(self, args) -> int:
@@ -870,19 +985,23 @@ Examples:
             if args.blacklist_command == 'list':
                 if daemon._components.get('blacklist_manager'):
                     blacklist_manager = daemon._components['blacklist_manager']
-                    entries = blacklist_manager.get_blacklist_entries(
-                        active_only=args.active_only,
-                        risk_level=args.risk_level
-                    )
-                    
-                    if args.json:
-                        print(json.dumps(entries, indent=2, default=str))
-                    else:
-                        print(f"Blacklist entries ({len(entries)} total):")
-                        for entry in entries:
-                            status = "ACTIVE" if entry['is_active'] else "INACTIVE"
-                            expires = f" (expires: {entry['expires_at']})" if entry['expires_at'] else ""
-                            print(f"  {entry['ip_address']} - {entry['reason']} [{entry['risk_level']}] {status}{expires}")
+                    try:
+                        entries = blacklist_manager.get_blacklist_entries(
+                            active_only=args.active_only,
+                            risk_level=args.risk_level
+                        )
+
+                        if args.json:
+                            print(json.dumps(entries, indent=2, default=str))
+                        else:
+                            print(f"Blacklist entries ({len(entries)} total):")
+                            for entry in entries:
+                                status = "ACTIVE" if entry['is_active'] else "INACTIVE"
+                                expires = f" (expires: {entry['expires_at']})" if entry['expires_at'] else ""
+                                print(f"  {entry['ip_address']} - {entry['reason']} [{entry['risk_level']}] {status}{expires}")
+                    except Exception as e:
+                        print(f"✗ Error retrieving blacklist entries: {e}", file=sys.stderr)
+                        return 1
                 else:
                     print("✗ Blacklist manager not initialized")
                     return 1
@@ -890,18 +1009,22 @@ Examples:
             elif args.blacklist_command == 'add':
                 if daemon._components.get('blacklist_manager'):
                     blacklist_manager = daemon._components['blacklist_manager']
-                    success = blacklist_manager.add_to_blacklist(
-                        ip_address=args.ip_address,
-                        reason=args.reason,
-                        risk_level=args.risk_level,
-                        ttl_hours=args.ttl_hours,
-                        enforce=args.enforce
-                    )
-                    
-                    if success:
-                        print(f"✓ Added {args.ip_address} to blacklist")
-                    else:
-                        print(f"✗ Failed to add {args.ip_address} to blacklist")
+                    try:
+                        success = blacklist_manager.add_to_blacklist(
+                            ip_address=args.ip_address,
+                            reason=args.reason,
+                            risk_level=args.risk_level,
+                            ttl_hours=args.ttl_hours,
+                            enforce=args.enforce
+                        )
+
+                        if success:
+                            print(f"✓ Added {args.ip_address} to blacklist")
+                        else:
+                            print(f"✗ Failed to add {args.ip_address} to blacklist")
+                            return 1
+                    except Exception as e:
+                        print(f"✗ Error adding to blacklist: {e}", file=sys.stderr)
                         return 1
                 else:
                     print("✗ Blacklist manager not initialized")
@@ -910,16 +1033,20 @@ Examples:
             elif args.blacklist_command == 'remove':
                 if daemon._components.get('blacklist_manager'):
                     blacklist_manager = daemon._components['blacklist_manager']
-                    success = blacklist_manager.remove_from_blacklist(
-                        ip_address=args.ip_address,
-                        source=args.source
-                    )
-                    
-                    if success:
-                        print(f"✓ Removed {args.ip_address} from blacklist")
-                    else:
-                        print(f"✗ Failed to remove {args.ip_address} from blacklist")
-                        return 1
+                    try:
+                        success = blacklist_manager.remove_from_blacklist(
+                            ip_address=args.ip_address,
+                            source=args.source
+                        )
+
+                        if success:
+                            print(f"✓ Removed {args.ip_address} from blacklist")
+                        else:
+                            print(f"✗ Failed to remove {args.ip_address} from blacklist")
+                            return 1
+                    except Exception as e:
+                         print(f"✗ Error removing from blacklist: {e}", file=sys.stderr)
+                         return 1
                 else:
                     print("✗ Blacklist manager not initialized")
                     return 1
@@ -927,7 +1054,7 @@ Examples:
             return 0
             
         except Exception as e:
-            print(f"Blacklist command failed: {e}")
+            print(f"Blacklist command failed: {e}", file=sys.stderr)
             return 1
 
     def _cmd_feedback(self, args) -> int:
@@ -949,45 +1076,55 @@ Examples:
             if daemon._components.get('feedback_manager'):
                 feedback_manager = daemon._components['feedback_manager']
 
-                # 1. Report false positive (add to trusted list)
-                success = feedback_manager.report_false_positive(
-                    ip_address=args.false_positive,
-                    reason=args.reason
-                )
+                try:
+                    # 1. Report false positive (add to trusted list)
+                    success = feedback_manager.report_false_positive(
+                        ip_address=args.false_positive,
+                        reason=args.reason
+                    )
 
-                if success:
-                    print(f"✓ Reported {args.false_positive} as false positive (trusted)")
+                    if success:
+                        print(f"✓ Reported {args.false_positive} as false positive (trusted)")
 
-                    # 2. Remove from blacklist if present
-                    if daemon._components.get('blacklist_manager'):
-                        blacklist_manager = daemon._components['blacklist_manager']
-                        if blacklist_manager.is_blacklisted(args.false_positive):
-                            rm_success = blacklist_manager.remove_from_blacklist(
-                                args.false_positive,
-                                source="feedback_correction"
-                            )
-                            if rm_success:
-                                print(f"✓ Removed {args.false_positive} from blacklist")
+                        # 2. Remove from blacklist if present
+                        if daemon._components.get('blacklist_manager'):
+                            blacklist_manager = daemon._components['blacklist_manager']
+                            try:
+                                if blacklist_manager.is_blacklisted(args.false_positive):
+                                    rm_success = blacklist_manager.remove_from_blacklist(
+                                        args.false_positive,
+                                        source="feedback_correction"
+                                    )
+                                    if rm_success:
+                                        print(f"✓ Removed {args.false_positive} from blacklist")
+                                    else:
+                                        print(f"⚠ Could not remove {args.false_positive} from blacklist")
+                            except Exception as e:
+                                print(f"⚠ Error removing from blacklist during feedback: {e}", file=sys.stderr)
+
+                        # 3. Trigger incremental retrain
+                        try:
+                            trigger_success = feedback_manager.trigger_retrain()
+                            if trigger_success:
+                                print("✓ Triggered incremental model retraining")
                             else:
-                                print(f"⚠ Could not remove {args.false_positive} from blacklist")
+                                print("✗ Failed to trigger retraining")
+                        except Exception as e:
+                             print(f"⚠ Error triggering retraining: {e}", file=sys.stderr)
 
-                    # 3. Trigger incremental retrain
-                    trigger_success = feedback_manager.trigger_retrain()
-                    if trigger_success:
-                        print("✓ Triggered incremental model retraining")
+                        return 0
                     else:
-                        print("✗ Failed to trigger retraining")
-
-                    return 0
-                else:
-                    print("✗ Failed to report false positive")
+                        print("✗ Failed to report false positive")
+                        return 1
+                except Exception as e:
+                    print(f"Error processing feedback: {e}", file=sys.stderr)
                     return 1
             else:
                 print("✗ Feedback manager not initialized")
                 return 1
 
         except Exception as e:
-            print(f"Feedback command failed: {e}")
+            print(f"Feedback command failed: {e}", file=sys.stderr)
             return 1
     
     def _is_process_running(self, pid_file: str) -> bool:
@@ -1000,17 +1137,24 @@ Examples:
             True if process is running, False otherwise
         """
         try:
-            if not Path(pid_file).exists():
+            path = Path(pid_file)
+            if not path.exists() or not path.is_file():
                 return False
             
-            with open(pid_file, 'r') as f:
-                pid = int(f.read().strip())
+            with open(path, 'r') as f:
+                content = f.read().strip()
+                if not content:
+                    return False
+                pid = int(content)
             
             # Check if process exists
             os.kill(pid, 0)
             return True
             
-        except (ValueError, OSError, FileNotFoundError):
+        except (ValueError, ProcessLookupError):
+            return False
+        except (OSError, IOError):
+            # Permission error or other OS error
             return False
     
     def _force_stop_daemon(self, pid_file: str) -> None:
@@ -1020,18 +1164,31 @@ Examples:
             pid_file: Path to PID file
         """
         try:
-            if Path(pid_file).exists():
-                with open(pid_file, 'r') as f:
-                    pid = int(f.read().strip())
+            path = Path(pid_file)
+            if path.exists():
+                with open(path, 'r') as f:
+                    content = f.read().strip()
+                    if not content:
+                        path.unlink(missing_ok=True)
+                        return
+                    pid = int(content)
                 
-                os.kill(pid, signal.SIGKILL)
-                print(f"Force killed process {pid}")
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    print(f"Force killed process {pid}")
+                except ProcessLookupError:
+                    print(f"Process {pid} already gone")
+                except PermissionError:
+                    print(f"Error: No permission to kill process {pid}", file=sys.stderr)
+                    return
                 
                 # Remove PID file
-                Path(pid_file).unlink()
+                path.unlink(missing_ok=True)
                 
-        except (ValueError, OSError, FileNotFoundError):
-            pass
+        except ValueError:
+            print(f"Error: Invalid PID file content", file=sys.stderr)
+        except (OSError, IOError) as e:
+            print(f"Error force stopping daemon: {e}", file=sys.stderr)
     
     def _print_status(self, status: Dict[str, Any]) -> None:
         """Print formatted status information.
