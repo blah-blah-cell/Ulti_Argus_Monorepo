@@ -582,6 +582,10 @@ class PredictionEngine:
             DataFrame containing flow data
         """
         try:
+            # Check if file is empty
+            if csv_file.stat().st_size == 0:
+                return pd.DataFrame()
+
             # Read CSV with error handling
             df = pd.read_csv(
                 csv_file,
@@ -1021,6 +1025,7 @@ class PredictionEngine:
             
             if success:
                 self._processed_files.add(csv_file.name)
+                self._stats['csv_files_processed'] += 1
             
             return success
             
