@@ -19,9 +19,13 @@ dependencies = [
   "ruff>=0.4.0",
   "torch>=2.0.0",
   "torchvision>=0.15.0",
+  "rich>=13.0.0",
+  "textual>=0.40.0",
 ]
 
 [project.scripts]
+argus-cli = "argus_v.cli:main"
+argus-tui = "argus_v.aegis.tui:main"
 argus-access = "argus_v.access_control.cli:main"
 argus-grant-access = "argus_v.access_control.cli:main_grant"
 argus-revoke-access = "argus_v.access_control.cli:main_revoke"
