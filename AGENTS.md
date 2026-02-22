@@ -17,8 +17,8 @@ This repository hosts the **Ulti_Argus ecosystem**, a privacy-first, AI-powered 
 
 2.  **Ulti_argus** (`Ulti_argus/`)
     *   **Role**: Inference/Control Plane & Orchestration.
-    *   **Technology**: Python 3.11+, Scapy (legacy capture), TensorFlow/PyTorch (AI).
-    *   **Function**: Receives flow data, performs AI-driven anomaly detection (Isolation Forest, CNNs), and enforces security policies (via `iptables`).
+    *   **Technology**: Python 3.11+, Scapy (legacy capture), PyTorch (AI).
+    *   **Function**: Receives flow data via IPC, performs AI-driven anomaly detection (Isolation Forest, CNNs), and enforces security policies via zero-latency eBPF map injection.
 
 ---
 
@@ -27,11 +27,12 @@ This repository hosts the **Ulti_Argus ecosystem**, a privacy-first, AI-powered 
 *   **Kronos Integration**: The system uses a component called **Kronos** (located in `Ulti_argus/src/argus_v/kronos`) as a meta-router between DPS and the analysis engines.
 *   **IPC Mechanism**: Communication between DPS (Rust) and Ulti_argus (Python) occurs via **Unix Domain Sockets**. DPS sends flow metadata (JSON/msgpack) to Kronos.
 *   **AI Pipeline**:
-    *   **Layer 0 (DPS)**: Kernel-level filtering and metadata extraction.
-    *   **Layer 1 (Kronos)**: Intelligent routing (Clear vs. Critical vs. Grey).
-    *   **Layer 2 (Isolation Forest)**: Flow-level anomaly scoring.
-    *   **Layer 3 (CNN/PayloadClassifier)**: Deep inspection of suspicious payloads.
-    *   **Enforcement (Aegis)**: Autonomous blocking via `iptables`.
+    *   **Layer 0 (DPS)**: Kernel-level eBPF packet parsing, XDP inline drops, and flow metadata extraction.
+    *   **Layer 1 (Kronos)**: Intelligent routing via Unix Sockets (`dps_kronos.sock`).
+    *   **Layer 2 (Isolation Forest)**: Flow-level anomaly scoring using `scikit-learn`.
+    *   **Layer 3 (CNN/PayloadClassifier)**: Deep inspection of suspicious payloads using `PyTorch`.
+    *   **Enforcement (Aegis)**: Autonomous zero-latency blocking directly in the eBPF kernel `BLOCKLIST` map via `KronosEnforcer` (`bpftool`), with `iptables` as a structural fallback.
+*   **Orchestration**: `install.sh` acts as the root orchestrator, automatically building DeepPacketSentinel, setting up Python environments, executing `train_models.py`, and initializing the `argus-sentinel` and `argus-brain` systemd services.
 
 ---
 
@@ -45,7 +46,9 @@ This repository hosts the **Ulti_Argus ecosystem**, a privacy-first, AI-powered 
 | `Ulti_argus/` | Python source code for the platform. |
 | `Ulti_argus/src/argus_v/` | Main Python package source. |
 | `Ulti_argus/tests/` | Pytest suite. |
-| `Ulti_argus/scripts/` | Utility scripts (deployment, training). |
+| `scripts/` | Utility scripts (e.g., `train_models.py` for compiling ML weights). |
+| `install.sh` | **Unified Root Installer**: Deploys DPS, AI models, and systemd services. |
+| `systemd/` | Service files (`argus-sentinel.service`, `argus-brain.service`). |
 | `implementation_plan.md.resolved` | **CRITICAL**: Reference for recent architectural decisions (Kronos, IPC). |
 
 ---
@@ -71,8 +74,8 @@ This repository hosts the **Ulti_Argus ecosystem**, a privacy-first, AI-powered 
 
 ### Ulti_argus (Python)
 *   **Python Version**: Requires Python **3.11+**.
-*   **Virtual Environment**: The project is designed to run in a venv, typically set up by `install.sh` in `/opt/argus_v`.
-*   **Dependencies**: Managed via `pyproject.toml` and `requirements.txt`.
+*   **Virtual Environment**: The project is designed to run in a venv, automatically set up by `install.sh` in `/opt/argus_v/venv`.
+*   **AI Training**: Do not depend on dummy weights. Run `python3 scripts/train_models.py` to compile real `model.pkl` and `payload_classifier.pth` files from `DeepPacketSentinel/data/sample_flows.ndjson`.
 *   **Testing**: Run `pytest` from the `Ulti_argus/` directory.
 
 ---
