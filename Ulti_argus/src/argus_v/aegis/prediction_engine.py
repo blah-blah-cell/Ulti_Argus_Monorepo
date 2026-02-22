@@ -14,11 +14,13 @@ before enforcement:
 
 from __future__ import annotations
 
+import gc
 import logging
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from collections import deque
 from queue import Empty, Queue
 from typing import Any, Dict, List, Optional
 
@@ -98,7 +100,8 @@ class PredictionEngine:
         self._prediction_thread = None
         self._ipc_thread = None
         self._csv_queue = Queue()
-        self._processed_files = set()
+        # Use a deque with maxlen to limit memory usage while tracking recent files
+        self._processed_files = deque(maxlen=2000)
         
         # Statistics
         self._stats = {
@@ -338,10 +341,22 @@ class PredictionEngine:
             csv_files = list(csv_dir.glob("*.csv"))
             
             # Filter out processed files
-            new_files = [
-                f for f in csv_files 
-                if f.name not in self._processed_files
-            ]
+            new_files = []
+            processed_suffix = self.polling_config.processed_file_suffix
+
+            for f in csv_files:
+                # Check memory cache first
+                if f.name in self._processed_files:
+                    continue
+
+                # Check for marker file on disk
+                marker_path = f.with_name(f.name + processed_suffix)
+                if marker_path.exists():
+                    # Add to cache to avoid disk check next time
+                    self._processed_files.append(f.name)
+                    continue
+
+                new_files.append(f)
             
             # Sort by modification time (newest first)
             new_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
@@ -368,8 +383,12 @@ class PredictionEngine:
                 success = self._process_csv_file(csv_file)
                 
                 if success:
-                    self._processed_files.add(csv_file.name)
+                    self._processed_files.append(csv_file.name)
                     self._stats['csv_files_processed'] += 1
+
+                    # Explicit GC periodically
+                    if self._stats['csv_files_processed'] % 10 == 0:
+                        gc.collect()
                 else:
                     # Put file back in queue for retry
                     self._csv_queue.put(csv_file)
@@ -390,52 +409,36 @@ class PredictionEngine:
 
     def _poll_ipc_socket(self) -> None:
         """Background thread that continuously reads FlowFrames from Kronos IPC."""
+        batch_frames = []
+        batch_start_time = time.time()
+        max_batch_size = 100
+        batch_timeout = 1.0
+
         while self._running:
             try:
-                # Blocks for up to 1 second waiting for a frame
-                frame = self.ipc_listener.get_frame(timeout=1.0)
-                if not frame:
-                    continue  # Timeout, check self._running and try again
+                # Use a small timeout to allow batch accumulation without excessive latency
+                frame = self.ipc_listener.get_frame(timeout=0.1)
                 
-                # Convert a single FlowFrame to a DataFrame matching the model's expected shape
-                # The model expects retina-style or legacy style schema. We'll use legacy for now mapping IPC fields.
-                flow_dict = {
-                    "src_ip": [frame.src_ip],
-                    "dst_ip": [frame.dst_ip],
-                    "src_port": [frame.src_port],
-                    "dst_port": [frame.dst_port],
-                    "protocol": [frame.protocol],
-                    "bytes_in": [frame.bytes_in],
-                    "bytes_out": [frame.bytes_out],
-                    "duration": [frame.duration],
-                    "packets_in": [1], # Approximation for missing packet counts
-                    "packets_out": [0],
-                    "timestamp": [datetime.now()]
-                }
+                if frame:
+                    batch_frames.append(frame)
                 
-                df = pd.DataFrame(flow_dict)
-                df = self._clean_flow_data(df)
+                # Check if we should process the batch
+                current_time = time.time()
+                is_batch_full = len(batch_frames) >= max_batch_size
+                is_timeout = (current_time - batch_start_time) >= batch_timeout
                 
-                if df.empty:
-                    continue
+                if (batch_frames and (is_batch_full or is_timeout)) or (not self._running and batch_frames):
+                    # Process the accumulated batch
+                    self._process_ipc_batch(batch_frames)
+
+                    # Reset batch
+                    batch_frames = []
+                    batch_start_time = current_time
                 
-                # Dynamic prediction
-                if not self.model_manager.is_model_available():
-                    if not self.model_manager.load_latest_model():
-                        continue
-                
-                predictions_df = self.model_manager.predict_flows(df)
-                
-                # We need to inject the payload bytes back into the router loop if it requests it.
-                # Right now _process_batch_predictions routes everything. 
-                # Let's pass the payload through a temporary column so the router can access it.
-                predictions_df['__raw_payload__'] = [frame.payload]
-                
-                self._process_batch_predictions(predictions_df)
-                
-                self._stats['total_flows_processed'] += 1
-                self._stats['total_predictions_made'] += 1
-                
+                # If we timed out with no frames, just update the start time
+                if not batch_frames and is_timeout:
+                    batch_start_time = current_time
+
             except Exception as e:
                 log_event(
                     logger,
@@ -443,7 +446,70 @@ class PredictionEngine:
                     level="error",
                     error=str(e)
                 )
+                # Clear batch on error to prevent bad state loops
+                batch_frames = []
+                batch_start_time = time.time()
                 time.sleep(1)
+
+    def _process_ipc_batch(self, frames: List[Any]) -> None:
+        """Process a batch of IPC frames."""
+        try:
+            # Convert frames to DataFrame
+            # The model expects retina-style or legacy style schema. We'll use legacy for now mapping IPC fields.
+            flow_dicts = []
+            now = datetime.now()
+
+            for frame in frames:
+                flow_dicts.append({
+                    "src_ip": frame.src_ip,
+                    "dst_ip": frame.dst_ip,
+                    "src_port": frame.src_port,
+                    "dst_port": frame.dst_port,
+                    "protocol": frame.protocol,
+                    "bytes_in": frame.bytes_in,
+                    "bytes_out": frame.bytes_out,
+                    "duration": frame.duration,
+                    "packets_in": 1, # Approximation
+                    "packets_out": 0,
+                    "timestamp": now,
+                    "__raw_payload__": frame.payload
+                })
+
+            if not flow_dicts:
+                return
+
+            df = pd.DataFrame(flow_dicts)
+
+            # Use _clean_flow_data to ensure types are correct and add anonymization
+            df = self._clean_flow_data(df)
+
+            if df.empty:
+                return
+
+            # Dynamic prediction
+            if not self.model_manager.is_model_available():
+                if not self.model_manager.load_latest_model():
+                    return
+
+            predictions_df = self.model_manager.predict_flows(df)
+
+            self._process_batch_predictions(predictions_df)
+
+            self._stats['total_flows_processed'] += len(frames)
+            self._stats['total_predictions_made'] += len(predictions_df)
+
+            # Explicit GC periodically based on flow count
+            # Using approximate check due to potential race condition on _stats
+            if self._stats['total_flows_processed'] % 5000 < len(frames):
+                gc.collect()
+
+        except Exception as e:
+            log_event(
+                logger,
+                "ipc_batch_processing_error",
+                level="error",
+                error=str(e)
+            )
     
     def _process_csv_file(self, csv_file: Path) -> bool:
         """Process a single CSV file and make predictions.
@@ -693,7 +759,7 @@ class PredictionEngine:
             essential_cols = ["src_ip", "dst_ip", "bytes_in", "bytes_out"]
             df = df.dropna(subset=essential_cols, how="any")
 
-            # Convert numeric columns
+            # Convert numeric columns using vectorized operations
             numeric_cols = [
                 "src_port",
                 "dst_port",
@@ -712,9 +778,15 @@ class PredictionEngine:
                 "dst_flow_bytes",
             ]
 
-            for col in numeric_cols:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            # Filter for columns present in the DataFrame
+            present_numeric_cols = [col for col in numeric_cols if col in df.columns]
+
+            if present_numeric_cols:
+                # Use apply with pd.to_numeric for batch conversion
+                # This is more efficient than iterating through columns
+                df[present_numeric_cols] = df[present_numeric_cols].apply(
+                    pd.to_numeric, errors="coerce"
+                ).fillna(0)
 
             # Ensure timestamp column exists and is valid
             if "timestamp" in df.columns:
@@ -766,34 +838,34 @@ class PredictionEngine:
             predictions_df: DataFrame with prediction results
         """
         try:
-            for _, row in predictions_df.iterrows():
+            for row in predictions_df.itertuples(index=False):
                 # Determine if action is needed
                 action_needed = False
                 action_reason = ""
                 risk_level = "low"
                 
                 # Check prediction results
-                prediction = row.get('prediction', 1)
-                anomaly_score = row.get('anomaly_score', 0)
-                risk_level = row.get('risk_level', 'low')
+                prediction = getattr(row, 'prediction', 1)
+                anomaly_score = getattr(row, 'anomaly_score', 0)
+                risk_level = getattr(row, 'risk_level', 'low')
                 
                 # Check for trusted IPs (Immediate Relief)
-                src_ip = row.get('src_ip', '')
-                dst_ip = row.get('dst_ip', '')
+                src_ip = getattr(row, 'src_ip', '')
+                dst_ip = getattr(row, 'dst_ip', '')
 
                 # ── Kronos triage ──────────────────────────────────────────
                 # If a KronosRouter is wired in, ask it how to handle this
                 # flow before we apply any enforcement logic.
                 if self.kronos_router is not None:
                     # Extract payload if it came from IPC socket
-                    payload_bytes = row.get('__raw_payload__', None)
+                    payload_bytes = getattr(row, '__raw_payload__', None)
                     
                     kronos_decision = self.kronos_router.route(
                         if_score=float(anomaly_score),
                         src_ip=src_ip,
                         dst_ip=dst_ip,
-                        protocol=str(row.get('protocol', 'OTHER')),
-                        dst_port=int(row.get('dst_port', 0)),
+                        protocol=str(getattr(row, 'protocol', 'OTHER')),
+                        dst_port=int(getattr(row, 'dst_port', 0)),
                         payload_available=(payload_bytes is not None),
                     )
 
@@ -859,7 +931,8 @@ class PredictionEngine:
                     action_needed = True
 
                     # Generate explanation for the anomaly
-                    explanation = self.model_manager.explain_anomaly(row)
+                    # itertuples returns namedtuple, convert to dict for explain_anomaly
+                    explanation = self.model_manager.explain_anomaly(row._asdict())
                     explanation_str = ", ".join(explanation)
 
                     action_reason = f"Anomaly detected: {explanation_str} (score: {anomaly_score:.3f})"
@@ -869,8 +942,7 @@ class PredictionEngine:
                         action_reason = f"High-risk anomaly: {explanation_str} (score: {anomaly_score:.3f}, risk: {risk_level})"
                 
                 # Check for blacklist violations
-                src_ip = row.get('src_ip', '')
-                dst_ip = row.get('dst_ip', '')
+                # src_ip/dst_ip are already fetched
                 
                 if src_ip and self.blacklist_manager.is_blacklisted(src_ip):
                     action_needed = True
@@ -894,11 +966,11 @@ class PredictionEngine:
                                 'prediction_score': float(anomaly_score),
                                 'flow_details': {
                                     'dst_ip': dst_ip,
-                                    'src_port': row.get('src_port'),
-                                    'dst_port': row.get('dst_port'),
-                                    'protocol': row.get('protocol'),
-                                    'bytes_in': row.get('bytes_in'),
-                                    'bytes_out': row.get('bytes_out')
+                                    'src_port': getattr(row, 'src_port', None),
+                                    'dst_port': getattr(row, 'dst_port', None),
+                                    'protocol': getattr(row, 'protocol', None),
+                                    'bytes_in': getattr(row, 'bytes_in', None),
+                                    'bytes_out': getattr(row, 'bytes_out', None)
                                 }
                             }
                         )
@@ -1020,7 +1092,7 @@ class PredictionEngine:
             success = self._process_csv_file(csv_file)
             
             if success:
-                self._processed_files.add(csv_file.name)
+                self._processed_files.append(csv_file.name)
             
             return success
             
