@@ -25,6 +25,13 @@ from .feedback_manager import FeedbackManager
 from .model_manager import ModelManager
 from .prediction_engine import PredictionEngine
 
+try:
+    from ..kronos.ipc_listener import IPCListener
+    from ..kronos.router import KronosRouter
+    _KRONOS_AVAILABLE = True
+except ImportError:
+    _KRONOS_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -250,6 +257,22 @@ class AegisDaemon:
             feedback_manager = FeedbackManager(self.config)
             self._components['feedback_manager'] = feedback_manager
 
+            # Initialize Kronos components if available
+            kronos_router = None
+            ipc_listener = None
+            if _KRONOS_AVAILABLE:
+                try:
+                    kronos_router = KronosRouter()
+                    ipc_listener = IPCListener()
+                    ipc_listener.start()
+                    self._components['kronos_router'] = kronos_router
+                    self._components['ipc_listener'] = ipc_listener
+                    log_event(logger, "kronos_components_initialized", level="info")
+                except Exception as k_err:
+                    log_event(logger, "kronos_initialization_failed", level="warning", error=str(k_err))
+                    kronos_router = None
+                    ipc_listener = None
+
             # Initialize prediction engine
             prediction_engine = PredictionEngine(
                 polling_config=self.config.polling,
@@ -257,7 +280,9 @@ class AegisDaemon:
                 model_manager=model_manager,
                 blacklist_manager=blacklist_manager,
                 anonymizer=anonymizer,
-                feedback_manager=feedback_manager
+                feedback_manager=feedback_manager,
+                kronos_router=kronos_router,
+                ipc_listener=ipc_listener
             )
             self._components['prediction_engine'] = prediction_engine
             
@@ -352,6 +377,14 @@ class AegisDaemon:
                         "prediction_engine_stop_failed",
                         level="warning"
                     )
+            
+            # Stop IPC listener
+            ipc_listener = self._components.get('ipc_listener')
+            if ipc_listener:
+                try:
+                    ipc_listener.stop()
+                except Exception as e:
+                    log_event(logger, "ipc_listener_stop_failed", level="warning", error=str(e))
             
             # Wait for monitoring thread
             time.sleep(1)

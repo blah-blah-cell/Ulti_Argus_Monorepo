@@ -67,6 +67,7 @@ class PredictionEngine:
         anonymizer=None,
         feedback_manager=None,
         kronos_router=None,
+        ipc_listener=None,
     ):
         """Initialize prediction engine.
         
@@ -80,6 +81,7 @@ class PredictionEngine:
             kronos_router: Optional KronosRouter for intelligent flow triage.
                            When provided, flows are routed to PASS / IF_ONLY /
                            ESCALATE before enforcement decisions are made.
+            ipc_listener: Optional IPCListener for real-time DeepPacketSentinel flows.
         """
         self.polling_config = polling_config
         self.prediction_config = prediction_config
@@ -88,11 +90,13 @@ class PredictionEngine:
         self.anonymizer = anonymizer
         self.feedback_manager = feedback_manager
         self.kronos_router = kronos_router if _KRONOS_AVAILABLE else None
+        self.ipc_listener = ipc_listener
         
         # State tracking
         self._running = False
         self._poll_thread = None
         self._prediction_thread = None
+        self._ipc_thread = None
         self._csv_queue = Queue()
         self._processed_files = set()
         
@@ -166,6 +170,20 @@ class PredictionEngine:
             )
             self._prediction_thread.start()
             
+            # Start IPC thread if listener provided
+            if self.ipc_listener is not None:
+                self._ipc_thread = threading.Thread(
+                    target=self._poll_ipc_socket,
+                    name="Aegis-IPC-Poller",
+                    daemon=True
+                )
+                self._ipc_thread.start()
+                log_event(
+                    logger,
+                    "ipc_polling_started",
+                    level="info"
+                )
+            
             log_event(
                 logger,
                 "prediction_engine_started",
@@ -220,6 +238,9 @@ class PredictionEngine:
             
             if self._prediction_thread and self._prediction_thread.is_alive():
                 self._prediction_thread.join(timeout=pred_timeout)
+            
+            if self._ipc_thread and self._ipc_thread.is_alive():
+                self._ipc_thread.join(timeout=timeout or 5)
             
             log_event(
                 logger,
@@ -366,6 +387,63 @@ class PredictionEngine:
                     level="error",
                     error=str(e)
                 )
+
+    def _poll_ipc_socket(self) -> None:
+        """Background thread that continuously reads FlowFrames from Kronos IPC."""
+        while self._running:
+            try:
+                # Blocks for up to 1 second waiting for a frame
+                frame = self.ipc_listener.get_frame(timeout=1.0)
+                if not frame:
+                    continue  # Timeout, check self._running and try again
+                
+                # Convert a single FlowFrame to a DataFrame matching the model's expected shape
+                # The model expects retina-style or legacy style schema. We'll use legacy for now mapping IPC fields.
+                flow_dict = {
+                    "src_ip": [frame.src_ip],
+                    "dst_ip": [frame.dst_ip],
+                    "src_port": [frame.src_port],
+                    "dst_port": [frame.dst_port],
+                    "protocol": [frame.protocol],
+                    "bytes_in": [frame.bytes_in],
+                    "bytes_out": [frame.bytes_out],
+                    "duration": [frame.duration],
+                    "packets_in": [1], # Approximation for missing packet counts
+                    "packets_out": [0],
+                    "timestamp": [datetime.now()]
+                }
+                
+                df = pd.DataFrame(flow_dict)
+                df = self._clean_flow_data(df)
+                
+                if df.empty:
+                    continue
+                
+                # Dynamic prediction
+                if not self.model_manager.is_model_available():
+                    if not self.model_manager.load_latest_model():
+                        continue
+                
+                predictions_df = self.model_manager.predict_flows(df)
+                
+                # We need to inject the payload bytes back into the router loop if it requests it.
+                # Right now _process_batch_predictions routes everything. 
+                # Let's pass the payload through a temporary column so the router can access it.
+                predictions_df['__raw_payload__'] = [frame.payload]
+                
+                self._process_batch_predictions(predictions_df)
+                
+                self._stats['total_flows_processed'] += 1
+                self._stats['total_predictions_made'] += 1
+                
+            except Exception as e:
+                log_event(
+                    logger,
+                    "ipc_polling_error",
+                    level="error",
+                    error=str(e)
+                )
+                time.sleep(1)
     
     def _process_csv_file(self, csv_file: Path) -> bool:
         """Process a single CSV file and make predictions.
@@ -707,14 +785,16 @@ class PredictionEngine:
                 # If a KronosRouter is wired in, ask it how to handle this
                 # flow before we apply any enforcement logic.
                 if self.kronos_router is not None:
-                    payload_bytes = None  # Retina CSV flows have no payload
+                    # Extract payload if it came from IPC socket
+                    payload_bytes = row.get('__raw_payload__', None)
+                    
                     kronos_decision = self.kronos_router.route(
                         if_score=float(anomaly_score),
                         src_ip=src_ip,
                         dst_ip=dst_ip,
                         protocol=str(row.get('protocol', 'OTHER')),
                         dst_port=int(row.get('dst_port', 0)),
-                        payload_available=False,
+                        payload_available=(payload_bytes is not None),
                     )
 
                     if kronos_decision.path == RoutingPath.PASS:

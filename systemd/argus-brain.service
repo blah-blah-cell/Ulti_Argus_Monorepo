@@ -1,0 +1,16 @@
+[Unit]
+Description=Ulti_Argus - Python AI Brain (Kronos + Aegis)
+After=network.target argus-sentinel.service
+
+[Service]
+Type=simple
+User=root
+# The listener creates the Unix socket file
+RuntimeDirectory=argus_v
+# We must run Aegis in daemon mode, inside the venv
+ExecStart=/opt/argus_v/venv/bin/argus-cli aegis start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

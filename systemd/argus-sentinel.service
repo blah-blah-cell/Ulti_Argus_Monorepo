@@ -1,0 +1,19 @@
+[Unit]
+Description=DeepPacketSentinel - Rust eBPF IPC Sender
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/argus_v/DeepPacketSentinel
+# Path to the compiled Userspace binary
+ExecStart=/opt/argus_v/DeepPacketSentinel/target/release/userspace --iface eth0 --kronos-socket /var/run/argus_v/dps_kronos.sock
+Restart=on-failure
+RestartSec=5
+
+# Ensure full capabilities for eBPF
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_BPF CAP_PERFMON CAP_NET_RAW
+AmbientCapabilities=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_BPF CAP_PERFMON CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target
