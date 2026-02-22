@@ -642,3 +642,8 @@ def load_aegis_config(
         health_check_port=health_check_port,
         shutdown_timeout=shutdown_timeout,
     )
+
+
+def get_default_config_path() -> Path:
+    """Return the default configuration file path."""
+    return Path(os.environ.get("ARGUS_CONFIG_FILE", "/etc/argus/aegis.yaml"))

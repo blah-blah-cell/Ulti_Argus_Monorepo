@@ -7,13 +7,15 @@ blocklist.
 
 from __future__ import annotations
 
+import argparse
 import json
+import logging
 import sqlite3
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 try:
     from rich.align import Align
@@ -30,20 +32,36 @@ except ImportError:
 
 from .config import get_default_config_path, load_aegis_config
 
+# Configure basic logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
 
 class AegisDashboard:
     """Live-updating Terminal Dashboard for Aegis."""
 
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str | None = None):
+        """Initialize the dashboard.
+
+        Args:
+            config_path: Path to the Aegis configuration file.
+        """
         self.console = Console()
         if config_path is None:
             config_path = str(get_default_config_path())
-        self.config = load_aegis_config(config_path)
+
+        try:
+            self.config = load_aegis_config(config_path)
+        except Exception as e:
+            logger.error(f"Failed to load configuration: {e}")
+            sys.exit(1)
         
         # Paths to poll
         self.stats_file = Path(self.config.stats_file)
-        self.blacklist_db = Path(self.config.blacklist_db_path)
         self.state_file = Path(self.config.state_file)
+
+        # Correctly access enforcement config for blacklist db path
+        self.blacklist_db = Path(self.config.enforcement.blacklist_db_path)
 
     def _read_stats(self) -> Dict[str, Any]:
         """Read the Aegis stats.json file safely."""
@@ -51,8 +69,8 @@ class AegisDashboard:
             if self.stats_file.exists():
                 with open(self.stats_file, "r") as f:
                     return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to read stats file: {e}")
         return {}
 
     def _read_engine_state(self) -> str:
@@ -62,8 +80,8 @@ class AegisDashboard:
                 with open(self.state_file, "r") as f:
                     state = json.load(f)
                     return state.get("state", "UNKNOWN")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to read state file: {e}")
         return "Not Running / Unknown"
 
     def _read_active_blocks(self, limit: int = 15) -> List[tuple]:
@@ -82,7 +100,8 @@ class AegisDashboard:
                     LIMIT ?
                 """, (limit,))
                 return cursor.fetchall()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to read active blocks: {e}")
             return []
 
     def make_header(self) -> Panel:
@@ -204,18 +223,24 @@ class AegisDashboard:
         """Start the live UI loop."""
         print("Starting Aegis Live TUI...")
         
-        with Live(self.generate_layout(), refresh_per_second=2, screen=True) as live:
-            try:
+        try:
+            with Live(self.generate_layout(), refresh_per_second=2, screen=True) as live:
                 while True:
                     time.sleep(1.0) # Refresh every second
                     live.update(self.generate_layout())
-            except KeyboardInterrupt:
-                pass
+        except KeyboardInterrupt:
+            print("\nAegis TUI stopped.")
+        except Exception as e:
+            logger.error(f"TUI crashed: {e}")
 
 
 def main():
     """CLI Entrypoint for argus-tui."""
-    dashboard = AegisDashboard()
+    parser = argparse.ArgumentParser(description="Aegis Live TUI Dashboard")
+    parser.add_argument("--config", help="Path to Aegis configuration file")
+    args = parser.parse_args()
+
+    dashboard = AegisDashboard(config_path=args.config)
     dashboard.run()
 
 
