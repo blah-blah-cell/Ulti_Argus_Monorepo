@@ -330,6 +330,9 @@ class BlacklistManager:
                 # Update statistics
                 self._update_stats()
                 
+                # Clear lookup cache
+                self.is_blacklisted.cache_clear()
+
                 return True
                 
         except BlacklistNotFoundError:
