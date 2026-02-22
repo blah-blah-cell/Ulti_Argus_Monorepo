@@ -13,7 +13,8 @@ class TestBlacklistOptimization:
             'iptables_chain_name': 'TEST-CHAIN',
             'blacklist_db_path': str(self.temp_dir / "blacklist.db"),
             'blacklist_json_path': str(self.temp_dir / "blacklist.json"),
-            'emergency_stop_file': str(self.temp_dir / "emergency.stop")
+            'emergency_stop_file': str(self.temp_dir / "emergency.stop"),
+            'anonymization_salt': 'test-salt'
         })()
 
     def teardown_method(self):
@@ -87,3 +88,30 @@ class TestBlacklistOptimization:
                         version_calls += 1
 
                 assert version_calls == 1, "Should check version only once"
+
+    def test_blacklist_lookup_caching(self):
+        """Test that blacklist lookups are cached."""
+        with patch('argus_v.aegis.blacklist_manager.HashAnonymizer'):
+            manager = BlacklistManager(self.config)
+            ip = "1.2.3.4"
+
+            # Mock the database connection to count calls
+            with patch('sqlite3.connect') as mock_connect:
+                # Mock the cursor and fetchone
+                mock_cursor = mock_connect.return_value.__enter__.return_value.cursor.return_value
+                mock_cursor.fetchone.return_value = None # Not blacklisted
+
+                # First call - should hit database
+                manager.is_blacklisted(ip)
+                assert mock_connect.call_count == 1
+
+                # Second call - should be cached
+                manager.is_blacklisted(ip)
+                assert mock_connect.call_count == 1
+
+                # Add to blacklist - should clear cache
+                manager.add_to_blacklist(ip, "test")
+
+                # Third call - should hit database again
+                manager.is_blacklisted(ip)
+                assert mock_connect.call_count > 1
