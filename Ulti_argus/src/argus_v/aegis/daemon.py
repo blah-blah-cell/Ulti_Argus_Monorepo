@@ -18,6 +18,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import yaml
+
+from ..oracle_core.config import ValidationError
 from ..oracle_core.logging import configure_logging, log_event
 from .blacklist_manager import BlacklistManager
 from .config import load_aegis_config
@@ -63,18 +66,45 @@ class AegisDaemon:
         
         Args:
             config_path: Path to configuration file
+
+        Raises:
+            ServiceStartError: If configuration loading fails
         """
-        # Load configuration
-        self.config = load_aegis_config(config_path)
+        if not config_path:
+            raise ServiceStartError("Configuration path cannot be empty")
+
+        if not os.path.exists(config_path):
+            raise ServiceStartError(f"Configuration file not found: {config_path}")
+
+        try:
+            # Load configuration
+            self.config = load_aegis_config(config_path)
+        except (OSError, ValueError, yaml.YAMLError, ValidationError) as e:
+            raise ServiceStartError(f"Failed to load configuration: {e}")
+        except Exception as e:
+            raise ServiceStartError(f"Unexpected error loading configuration: {e}")
         
         # Configure logging
-        self._setup_logging()
+        try:
+            self._setup_logging()
+        except Exception as e:
+            # Fallback basic logging if setup fails
+            logging.basicConfig(level=logging.INFO)
+            logger.error(f"Failed to setup logging: {e}")
         
         # Service state
         self._running = False
         self._shutdown_event = threading.Event()
         self._start_time = None
-        self._components = {}
+        self._components = {
+            'anonymizer': None,
+            'model_manager': None,
+            'blacklist_manager': None,
+            'feedback_manager': None,
+            'kronos_router': None,
+            'ipc_listener': None,
+            'prediction_engine': None
+        }
         
         # Statistics and monitoring
         self._stats = {
@@ -90,7 +120,7 @@ class AegisDaemon:
             'configuration_issues': []
         }
         
-        # Initialize components
+        # Initialize components structure
         self._initialize_components()
         
         log_event(
@@ -110,7 +140,7 @@ class AegisDaemon:
         )
     
     def _initialize_components(self) -> None:
-        """Initialize all Aegis components."""
+        """Initialize Aegis components structure and validate config."""
         try:
             log_event(
                 logger,
@@ -118,11 +148,8 @@ class AegisDaemon:
                 level="info"
             )
             
-            # Initialize core components
-            self._components['anonymizer'] = None  # Will be initialized in start()
-            self._components['model_manager'] = None
-            self._components['blacklist_manager'] = None  
-            self._components['prediction_engine'] = None
+            # Components are already pre-filled with None in __init__
+            # This method now primarily focuses on validation before heavy lifting in start()
             
             # Validate configuration
             config_issues = self._validate_configuration()
@@ -137,7 +164,7 @@ class AegisDaemon:
             
             log_event(
                 logger,
-                "components_initialization_completed",
+                "components_structure_initialized",
                 level="info"
             )
             
@@ -229,104 +256,144 @@ class AegisDaemon:
             )
             
             # Set up signal handlers
-            self._setup_signal_handlers()
+            try:
+                self._setup_signal_handlers()
+            except Exception as e:
+                # Critical failure: cannot handle signals
+                raise ServiceStartError(f"Failed to setup signal handlers: {e}")
             
-            # Initialize anonymizer
-            from ..oracle_core.anonymize import HashAnonymizer
-            anonymizer = HashAnonymizer(salt=self.config.anonymization_salt)
-            self._components['anonymizer'] = anonymizer
-            
-            # Initialize model manager
-            model_manager = ModelManager(
-                config=self.config.model,
-                anonymizer=anonymizer,
-                feature_columns=self.config.prediction.feature_columns,
-            )
-            model_manager.anomaly_threshold = self.config.prediction.anomaly_threshold
-            model_manager.high_risk_threshold = self.config.prediction.high_risk_threshold
-            self._components['model_manager'] = model_manager
-            
-            # Initialize blacklist manager
-            blacklist_manager = BlacklistManager(
-                config=self.config.enforcement,
-                anonymizer=anonymizer
-            )
-            self._components['blacklist_manager'] = blacklist_manager
-            
-            # Initialize feedback manager (Active Learning)
-            feedback_manager = FeedbackManager(self.config)
-            self._components['feedback_manager'] = feedback_manager
-
-            # Initialize Kronos components if available
-            kronos_router = None
-            ipc_listener = None
-            if _KRONOS_AVAILABLE:
+            # Initialize components step-by-step
+            try:
+                # Initialize anonymizer
                 try:
-                    kronos_router = KronosRouter()
-                    ipc_listener = IPCListener()
-                    ipc_listener.start()
-                    self._components['kronos_router'] = kronos_router
-                    self._components['ipc_listener'] = ipc_listener
-                    log_event(logger, "kronos_components_initialized", level="info")
-                except Exception as k_err:
-                    log_event(logger, "kronos_initialization_failed", level="warning", error=str(k_err))
-                    kronos_router = None
-                    ipc_listener = None
+                    from ..oracle_core.anonymize import HashAnonymizer
+                    anonymizer = HashAnonymizer(salt=self.config.anonymization_salt)
+                    self._components['anonymizer'] = anonymizer
+                except Exception as e:
+                    raise ServiceStartError(f"Failed to initialize anonymizer: {e}")
 
-            # Initialize prediction engine
-            prediction_engine = PredictionEngine(
-                polling_config=self.config.polling,
-                prediction_config=self.config.prediction,
-                model_manager=model_manager,
-                blacklist_manager=blacklist_manager,
-                anonymizer=anonymizer,
-                feedback_manager=feedback_manager,
-                kronos_router=kronos_router,
-                ipc_listener=ipc_listener
-            )
-            self._components['prediction_engine'] = prediction_engine
-            
-            # Load initial model
-            if not model_manager.load_latest_model():
+                # Initialize model manager
+                try:
+                    model_manager = ModelManager(
+                        config=self.config.model,
+                        anonymizer=anonymizer,
+                        feature_columns=self.config.prediction.feature_columns,
+                    )
+                    model_manager.anomaly_threshold = self.config.prediction.anomaly_threshold
+                    model_manager.high_risk_threshold = self.config.prediction.high_risk_threshold
+                    self._components['model_manager'] = model_manager
+                except Exception as e:
+                    raise ServiceStartError(f"Failed to initialize ModelManager: {e}")
+
+                # Initialize blacklist manager
+                try:
+                    blacklist_manager = BlacklistManager(
+                        config=self.config.enforcement,
+                        anonymizer=anonymizer
+                    )
+                    self._components['blacklist_manager'] = blacklist_manager
+                except Exception as e:
+                    raise ServiceStartError(f"Failed to initialize BlacklistManager: {e}")
+
+                # Initialize feedback manager (Active Learning)
+                try:
+                    feedback_manager = FeedbackManager(self.config)
+                    self._components['feedback_manager'] = feedback_manager
+                except Exception as e:
+                    raise ServiceStartError(f"Failed to initialize FeedbackManager: {e}")
+
+                # Initialize Kronos components if available
+                kronos_router = None
+                ipc_listener = None
+                if _KRONOS_AVAILABLE:
+                    try:
+                        kronos_router = KronosRouter()
+                        ipc_listener = IPCListener()
+                        ipc_listener.start()
+                        self._components['kronos_router'] = kronos_router
+                        self._components['ipc_listener'] = ipc_listener
+                        log_event(logger, "kronos_components_initialized", level="info")
+                    except Exception as k_err:
+                        log_event(logger, "kronos_initialization_failed", level="warning", error=str(k_err))
+                        # Non-critical failure, continue with local mode
+                        kronos_router = None
+                        ipc_listener = None
+
+                # Initialize prediction engine
+                try:
+                    prediction_engine = PredictionEngine(
+                        polling_config=self.config.polling,
+                        prediction_config=self.config.prediction,
+                        model_manager=model_manager,
+                        blacklist_manager=blacklist_manager,
+                        anonymizer=anonymizer,
+                        feedback_manager=feedback_manager,
+                        kronos_router=kronos_router,
+                        ipc_listener=ipc_listener
+                    )
+                    self._components['prediction_engine'] = prediction_engine
+                except Exception as e:
+                    raise ServiceStartError(f"Failed to initialize PredictionEngine: {e}")
+
+                # Load initial model
+                try:
+                    if not model_manager.load_latest_model():
+                        log_event(
+                            logger,
+                            "initial_model_load_failed",
+                            level="warning"
+                        )
+                except Exception as e:
+                    log_event(
+                        logger,
+                        "model_load_exception",
+                        level="error",
+                        error=str(e)
+                    )
+                    # Continue, as ModelManager handles fallbacks
+
+                # Start prediction engine
+                try:
+                    if not prediction_engine.start():
+                        raise ServiceStartError("Failed to start prediction engine")
+                except Exception as e:
+                    raise ServiceStartError(f"Exception starting prediction engine: {e}")
+
+                # Calculate dry run end time
+                self._stats['dry_run_end_time'] = (
+                    datetime.now() + timedelta(days=self.config.enforcement.dry_run_duration_days)
+                ).isoformat()
+
+                # Set running state
+                self._running = True
+                self._start_time = datetime.now()
+                self._stats['service_start_time'] = self._start_time.isoformat()
+
+                # Start background monitoring thread
+                monitor_thread = threading.Thread(
+                    target=self._monitoring_loop,
+                    name="Aegis-Monitor",
+                    daemon=True
+                )
+                monitor_thread.start()
+
                 log_event(
                     logger,
-                    "initial_model_load_failed",
-                    level="warning"
+                    "aegis_daemon_started",
+                    level="info",
+                    dry_run_duration_days=self.config.enforcement.dry_run_duration_days,
+                    dry_run_end_time=self._stats['dry_run_end_time'],
+                    components=[k for k, v in self._components.items() if v is not None]
                 )
-            
-            # Start prediction engine
-            if not prediction_engine.start():
-                raise ServiceStartError("Failed to start prediction engine")
-            
-            # Calculate dry run end time
-            self._stats['dry_run_end_time'] = (
-                datetime.now() + timedelta(days=self.config.enforcement.dry_run_duration_days)
-            ).isoformat()
-            
-            # Set running state
-            self._running = True
-            self._start_time = datetime.now()
-            self._stats['service_start_time'] = self._start_time.isoformat()
-            
-            # Start background monitoring thread
-            monitor_thread = threading.Thread(
-                target=self._monitoring_loop,
-                name="Aegis-Monitor",
-                daemon=True
-            )
-            monitor_thread.start()
-            
-            log_event(
-                logger,
-                "aegis_daemon_started",
-                level="info",
-                dry_run_duration_days=self.config.enforcement.dry_run_duration_days,
-                dry_run_end_time=self._stats['dry_run_end_time'],
-                components=list(self._components.keys())
-            )
-            
-            return True
-            
+
+                return True
+
+            except Exception as e:
+                # Rollback/Cleanup on failure
+                log_event(logger, "startup_sequence_failed", level="error", error=str(e))
+                self.stop() # Attempt to clean up anything that started
+                raise
+
         except Exception as e:
             log_event(
                 logger,
@@ -364,42 +431,62 @@ class AegisDaemon:
                 timeout=timeout
             )
             
-            # Signal shutdown
+            # Signal shutdown first to stop loops
             self._running = False
             self._shutdown_event.set()
             
+            shutdown_errors = []
+
             # Stop prediction engine
-            prediction_engine = self._components.get('prediction_engine')
-            if prediction_engine:
-                if not prediction_engine.stop(timeout // 2):
-                    log_event(
-                        logger,
-                        "prediction_engine_stop_failed",
-                        level="warning"
-                    )
-            
+            try:
+                prediction_engine = self._components.get('prediction_engine')
+                if prediction_engine:
+                    if not prediction_engine.stop(timeout // 2):
+                        log_event(
+                            logger,
+                            "prediction_engine_stop_failed",
+                            level="warning"
+                        )
+                        shutdown_errors.append("prediction_engine_stop_failed")
+            except Exception as e:
+                log_event(logger, "prediction_engine_stop_exception", level="error", error=str(e))
+                shutdown_errors.append(f"prediction_engine_error: {e}")
+
             # Stop IPC listener
-            ipc_listener = self._components.get('ipc_listener')
-            if ipc_listener:
-                try:
+            try:
+                ipc_listener = self._components.get('ipc_listener')
+                if ipc_listener:
                     ipc_listener.stop()
-                except Exception as e:
-                    log_event(logger, "ipc_listener_stop_failed", level="warning", error=str(e))
+            except Exception as e:
+                log_event(logger, "ipc_listener_stop_failed", level="warning", error=str(e))
+                shutdown_errors.append(f"ipc_listener_error: {e}")
             
-            # Wait for monitoring thread
+            # Wait for monitoring thread to notice _running=False
             time.sleep(1)
             
             # Update statistics
-            if self._start_time:
-                runtime = datetime.now() - self._start_time
-                self._stats['total_runtime_seconds'] = runtime.total_seconds()
-            
-            log_event(
-                logger,
-                "aegis_daemon_stopped",
-                level="info",
-                total_runtime_seconds=self._stats['total_runtime_seconds']
-            )
+            try:
+                if self._start_time:
+                    runtime = datetime.now() - self._start_time
+                    self._stats['total_runtime_seconds'] = runtime.total_seconds()
+            except Exception as e:
+                log_event(logger, "stats_update_failed_during_stop", level="warning", error=str(e))
+
+            if shutdown_errors:
+                 log_event(
+                    logger,
+                    "aegis_daemon_stopped_with_errors",
+                    level="warning",
+                    errors=shutdown_errors,
+                    total_runtime_seconds=self._stats.get('total_runtime_seconds', 0)
+                )
+            else:
+                log_event(
+                    logger,
+                    "aegis_daemon_stopped",
+                    level="info",
+                    total_runtime_seconds=self._stats.get('total_runtime_seconds', 0)
+                )
             
             return True
             
@@ -411,6 +498,10 @@ class AegisDaemon:
                 error=str(e)
             )
             return False
+        finally:
+            # Absolute guarantee these are set
+            self._running = False
+            self._shutdown_event.set()
     
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""
@@ -429,35 +520,70 @@ class AegisDaemon:
     
     def _monitoring_loop(self) -> None:
         """Background monitoring and maintenance loop."""
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+
         while self._running:
             try:
                 # Health check
-                self._perform_health_check()
+                try:
+                    self._perform_health_check()
+                except Exception as e:
+                    log_event(logger, "health_check_failed", level="error", error=str(e))
                 
                 # Update statistics
-                self._update_statistics()
+                try:
+                    self._update_statistics()
+                except Exception as e:
+                    log_event(logger, "stats_update_failed", level="error", error=str(e))
                 
                 # Cleanup expired blacklist entries
-                blacklist_manager = self._components.get('blacklist_manager')
-                if blacklist_manager:
-                    blacklist_manager.cleanup_expired_entries()
+                blacklist_manager = None
+                try:
+                    blacklist_manager = self._components.get('blacklist_manager')
+                    if blacklist_manager:
+                        blacklist_manager.cleanup_expired_entries()
+                except Exception as e:
+                    log_event(logger, "blacklist_cleanup_failed", level="error", error=str(e))
                 
                 # Sync with Firebase if enabled
-                if (blacklist_manager and 
-                    self._should_sync_firebase()):
-                    blacklist_manager.sync_with_firebase()
+                try:
+                    if (blacklist_manager and
+                        self._should_sync_firebase()):
+                        blacklist_manager.sync_with_firebase()
+                except Exception as e:
+                    log_event(logger, "firebase_sync_failed", level="error", error=str(e))
                 
-                # Sleep for monitoring interval
-                time.sleep(60)  # Monitor every minute
+                # Reset error counter on successful iteration
+                consecutive_errors = 0
                 
             except Exception as e:
+                consecutive_errors += 1
                 log_event(
                     logger,
-                    "monitoring_loop_error",
+                    "monitoring_loop_critical_error",
                     level="error",
-                    error=str(e)
+                    error=str(e),
+                    consecutive_errors=consecutive_errors
                 )
-                time.sleep(30)  # Shorter sleep on error
+
+                if consecutive_errors >= max_consecutive_errors:
+                    log_event(
+                        logger,
+                        "monitoring_loop_unstable",
+                        level="critical",
+                        message="Monitoring loop experiencing persistent errors"
+                    )
+
+            finally:
+                # Ensure we sleep to prevent tight loop and check shutdown signal
+                sleep_time = 60 if consecutive_errors == 0 else 30
+
+                # Sleep in 1-second intervals to respond to shutdown quickly
+                for _ in range(sleep_time):
+                    if not self._running:
+                        break
+                    time.sleep(1)
     
     def _perform_health_check(self) -> None:
         """Perform health check on all components."""
@@ -518,12 +644,19 @@ class AegisDaemon:
             # Gather component statistics
             component_stats = {}
             
-            for name, component in self._components.items():
-                if component:
-                    if hasattr(component, 'get_statistics'):
-                        component_stats[name] = component.get_statistics()
-                    elif hasattr(component, 'get_model_info'):
-                        component_stats[name] = component.get_model_info()
+            try:
+                for name, component in self._components.items():
+                    if component:
+                        try:
+                            if hasattr(component, 'get_statistics'):
+                                component_stats[name] = component.get_statistics()
+                            elif hasattr(component, 'get_model_info'):
+                                component_stats[name] = component.get_model_info()
+                        except Exception as e:
+                            log_event(logger, "component_stats_error", component=name, error=str(e))
+                            component_stats[name] = {"error": str(e)}
+            except Exception as e:
+                log_event(logger, "stats_collection_failed", level="error", error=str(e))
             
             # Combine all statistics
             all_stats = {
@@ -533,12 +666,28 @@ class AegisDaemon:
                 'timestamp': datetime.now().isoformat()
             }
             
-            # Write to statistics file
+            # Atomic write to statistics file
             stats_file = Path(self.config.stats_file)
-            stats_file.parent.mkdir(parents=True, exist_ok=True)
+            temp_file = stats_file.with_suffix('.tmp')
             
-            with open(stats_file, 'w') as f:
-                json.dump(all_stats, f, indent=2, default=str)
+            try:
+                stats_file.parent.mkdir(parents=True, exist_ok=True)
+
+                with open(temp_file, 'w') as f:
+                    json.dump(all_stats, f, indent=2, default=str)
+                    f.flush()
+                    os.fsync(f.fileno())
+
+                # Atomic rename
+                temp_file.replace(stats_file)
+
+            except (OSError, IOError) as e:
+                log_event(logger, "stats_file_write_error", level="error", error=str(e))
+                if temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except OSError:
+                        pass
             
         except Exception as e:
             log_event(
@@ -555,12 +704,9 @@ class AegisDaemon:
             Dictionary containing health status information
         """
         try:
-            status = {
-                'overall_health': 'healthy',
-                'components_healthy': 0,
-                'total_components': 0,
-                'component_details': {},
-                'service_info': {
+            # Safe calculation of service info
+            try:
+                service_info = {
                     'is_running': self._running,
                     'start_time': self._start_time.isoformat() if self._start_time else None,
                     'uptime_seconds': (
@@ -569,46 +715,56 @@ class AegisDaemon:
                     ),
                     'dry_run_remaining_days': self._get_dry_run_remaining_days()
                 }
+            except Exception as e:
+                service_info = {'error': str(e), 'is_running': self._running}
+
+            status = {
+                'overall_health': 'unknown',
+                'components_healthy': 0,
+                'total_components': 0,
+                'component_details': {},
+                'service_info': service_info
             }
             
+            # Helper to safely check component health
+            def _check_component(name: str, check_fn):
+                try:
+                    component = self._components.get(name)
+                    if not component:
+                        return
+
+                    status['total_components'] += 1
+                    is_healthy = True
+                    details = {}
+
+                    try:
+                        is_healthy, details = check_fn(component)
+                    except Exception as inner_e:
+                        is_healthy = False
+                        details = {'error': str(inner_e)}
+
+                    if is_healthy:
+                        status['components_healthy'] += 1
+
+                    status['component_details'][name] = {
+                        'healthy': is_healthy,
+                        **details
+                    }
+                except Exception as e:
+                    # Should not happen given the structure, but zero-trust
+                    log_event(logger, "health_check_component_error", component=name, error=str(e))
+
             # Check model manager
-            model_manager = self._components.get('model_manager')
-            if model_manager:
-                status['total_components'] += 1
-                model_healthy = model_manager.is_model_available()
-                if model_healthy:
-                    status['components_healthy'] += 1
-                
-                status['component_details']['model_manager'] = {
-                    'healthy': model_healthy,
-                    'model_info': model_manager.get_model_info()
-                }
+            _check_component('model_manager',
+                lambda c: (c.is_model_available(), {'model_info': c.get_model_info()}))
             
             # Check blacklist manager
-            blacklist_manager = self._components.get('blacklist_manager')
-            if blacklist_manager:
-                status['total_components'] += 1
-                blacklist_healthy = True  # Blacklist manager is generally healthy
-                if blacklist_healthy:
-                    status['components_healthy'] += 1
-                
-                status['component_details']['blacklist_manager'] = {
-                    'healthy': blacklist_healthy,
-                    'stats': blacklist_manager.get_statistics()
-                }
+            _check_component('blacklist_manager',
+                lambda c: (True, {'stats': c.get_statistics()}))
             
             # Check prediction engine
-            prediction_engine = self._components.get('prediction_engine')
-            if prediction_engine:
-                status['total_components'] += 1
-                pred_healthy = prediction_engine._running
-                if pred_healthy:
-                    status['components_healthy'] += 1
-                
-                status['component_details']['prediction_engine'] = {
-                    'healthy': pred_healthy,
-                    'stats': prediction_engine.get_statistics()
-                }
+            _check_component('prediction_engine',
+                lambda c: (c._running, {'stats': c.get_statistics()}))
             
             # Determine overall health
             if status['total_components'] > 0:
@@ -619,6 +775,10 @@ class AegisDaemon:
                     status['overall_health'] = 'degraded'
                 else:
                     status['overall_health'] = 'unhealthy'
+            elif self._running:
+                status['overall_health'] = 'degraded'  # Running but no components
+            else:
+                status['overall_health'] = 'stopped'
             
             return status
             
