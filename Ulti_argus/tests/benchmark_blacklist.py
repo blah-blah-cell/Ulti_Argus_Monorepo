@@ -1,3 +1,14 @@
+import sys
+from unittest.mock import MagicMock
+sys.modules["yaml"] = MagicMock()
+sys.modules["numpy"] = MagicMock()
+sys.modules["pandas"] = MagicMock()
+sys.modules["sklearn"] = MagicMock()
+sys.modules["sklearn.ensemble"] = MagicMock()
+sys.modules["torch"] = MagicMock()
+sys.modules["torchvision"] = MagicMock()
+sys.modules["joblib"] = MagicMock()
+
 import time
 import sqlite3
 import shutil
