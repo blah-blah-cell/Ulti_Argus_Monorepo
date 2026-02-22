@@ -46,7 +46,13 @@ python3 -m venv /opt/argus_v/venv
 /opt/argus_v/venv/bin/pip install -U pip wheel
 /opt/argus_v/venv/bin/pip install -e .
 
-echo "6. Configuring OS Services..."
+echo "6. Training Initial AI Models..."
+# Create model directories expected by Aegis
+mkdir -p /opt/argus_v/models
+# Run the training script using our synthetic flow datset
+/opt/argus_v/venv/bin/python3 "$(dirname "$0")/../scripts/train_models.py"
+
+echo "7. Configuring OS Services..."
 # The systemd templates
 cp "$(dirname "$0")/../systemd/argus-sentinel.service" /etc/systemd/system/
 cp "$(dirname "$0")/../systemd/argus-brain.service" /etc/systemd/system/

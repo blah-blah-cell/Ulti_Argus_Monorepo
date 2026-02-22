@@ -30,3 +30,17 @@ retina:
 
   # Anonymization - use environment variable or change in production
   ip_salt: "retina_default_salt_change_in_production"
+
+  # Alert mechanisms
+  alerts:
+    email:
+      enabled: false
+      smtp_server: "localhost"
+      smtp_port: 25
+      from_address: "argus-v@example.com"
+      to_addresses: []
+    webhook:
+      enabled: false
+      url: ""
+      method: "POST"
+      headers: {}
