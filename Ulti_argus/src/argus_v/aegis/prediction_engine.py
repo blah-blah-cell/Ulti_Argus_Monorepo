@@ -392,13 +392,19 @@ class PredictionEngine:
         """Background thread that continuously reads FlowFrames from Kronos IPC."""
         while self._running:
             try:
-                # Blocks for up to 1 second waiting for a frame
+                # Blocks for up to 1 second waiting for a frame.
+                # If no frame is received within the timeout, we loop back to check
+                # self._running again.
                 frame = self.ipc_listener.get_frame(timeout=1.0)
                 if not frame:
                     continue  # Timeout, check self._running and try again
                 
-                # Convert a single FlowFrame to a DataFrame matching the model's expected shape
-                # The model expects retina-style or legacy style schema. We'll use legacy for now mapping IPC fields.
+                # Convert a single FlowFrame to a DataFrame matching the model's expected shape.
+                # The model expects retina-style or legacy style schema. We'll use legacy for now
+                # by mapping the IPC fields directly.
+                #
+                # Note: 'packets_in' is approximated as 1 because we are processing flow starts
+                # or single frames, and we might not have the full packet count yet.
                 flow_dict = {
                     "src_ip": [frame.src_ip],
                     "dst_ip": [frame.dst_ip],
@@ -419,7 +425,9 @@ class PredictionEngine:
                 if df.empty:
                     continue
                 
-                # Dynamic prediction
+                # Dynamic prediction: Ensure the model is loaded before inference.
+                # If the model is not available, we attempt to load it. If loading fails,
+                # we skip this frame to avoid crashing.
                 if not self.model_manager.is_model_available():
                     if not self.model_manager.load_latest_model():
                         continue
@@ -429,6 +437,8 @@ class PredictionEngine:
                 # We need to inject the payload bytes back into the router loop if it requests it.
                 # Right now _process_batch_predictions routes everything. 
                 # Let's pass the payload through a temporary column so the router can access it.
+                # The '__raw_payload__' column is used by KronosRouter to decide if deep inspection
+                # (via CNN) is possible and necessary.
                 predictions_df['__raw_payload__'] = [frame.payload]
                 
                 self._process_batch_predictions(predictions_df)
@@ -653,6 +663,8 @@ class PredictionEngine:
 
             # Normalize between the legacy schema (bytes_in/bytes_out/...) and the
             # current Retina CSV schema produced by csv_rotator.py.
+            # We check if the newer "anon" fields exist and map them to the
+            # canonical "src_ip" / "dst_ip" expected by the model.
             if "src_ip" not in df.columns and "src_ip_anon" in df.columns:
                 df["src_ip"] = df["src_ip_anon"]
             if "dst_ip" not in df.columns and "dst_ip_anon" in df.columns:
@@ -661,6 +673,7 @@ class PredictionEngine:
             if "duration" not in df.columns and "duration_seconds" in df.columns:
                 df["duration"] = df["duration_seconds"]
 
+            # Map byte counts: try specific flow direction first, then general count, else 0.
             if "bytes_in" not in df.columns:
                 if "src_flow_bytes" in df.columns:
                     df["bytes_in"] = df["src_flow_bytes"]
@@ -675,6 +688,7 @@ class PredictionEngine:
                 else:
                     df["bytes_out"] = 0
 
+            # Map packet counts: similar logic to bytes.
             if "packets_in" not in df.columns:
                 if "src_flow_packets" in df.columns:
                     df["packets_in"] = df["src_flow_packets"]
@@ -689,11 +703,13 @@ class PredictionEngine:
                 else:
                     df["packets_out"] = 0
 
-            # Remove rows with missing essential data
+            # Remove rows with missing essential data.
+            # We strictly require IP addresses and byte counts to make a meaningful prediction.
             essential_cols = ["src_ip", "dst_ip", "bytes_in", "bytes_out"]
             df = df.dropna(subset=essential_cols, how="any")
 
-            # Convert numeric columns
+            # Convert numeric columns to appropriate types, coercing errors to NaN and filling with 0.
+            # This ensures that even if some fields are malformed strings, the model receives numbers.
             numeric_cols = [
                 "src_port",
                 "dst_port",
@@ -716,7 +732,8 @@ class PredictionEngine:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-            # Ensure timestamp column exists and is valid
+            # Ensure timestamp column exists and is valid.
+            # If 'window_start' is available (from Retina CSV), use it; otherwise fallback to current time.
             if "timestamp" in df.columns:
                 df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
                 df = df.dropna(subset=["timestamp"])
@@ -726,7 +743,8 @@ class PredictionEngine:
             else:
                 df["timestamp"] = datetime.now()
 
-            # Add anonymized IP columns if anonymizer available
+            # Add anonymized IP columns if anonymizer available.
+            # This allows for privacy-preserving logging or secondary analysis.
             if self.anonymizer:
                 def safe_anonymize(ip):
                     try:
@@ -785,9 +803,13 @@ class PredictionEngine:
                 # If a KronosRouter is wired in, ask it how to handle this
                 # flow before we apply any enforcement logic.
                 if self.kronos_router is not None:
-                    # Extract payload if it came from IPC socket
+                    # Extract payload if it came from IPC socket.
+                    # This payload is necessary for the CNN model (if escalated).
                     payload_bytes = row.get('__raw_payload__', None)
                     
+                    # Ask KronosRouter for a routing decision.
+                    # The decision is based on the IsolationForest score, flow metadata,
+                    # and potentially historical behavior of the IP.
                     kronos_decision = self.kronos_router.route(
                         if_score=float(anomaly_score),
                         src_ip=src_ip,
@@ -798,7 +820,8 @@ class PredictionEngine:
                     )
 
                     if kronos_decision.path == RoutingPath.PASS:
-                        # Kronos is confident this is normal — skip entirely
+                        # Kronos is confident this is normal — skip entirely.
+                        # This avoids false positives for known benign traffic patterns.
                         log_event(
                             logger,
                             "kronos_fast_pass",
@@ -809,8 +832,9 @@ class PredictionEngine:
                         continue
 
                     if kronos_decision.path == RoutingPath.ESCALATE:
-                        # Kronos wants CNN to weigh in — use pytorch_inference
-                        # (payload is None here; CNN will return 0.0 gracefully)
+                        # Kronos wants CNN to weigh in — use pytorch_inference.
+                        # This happens when the traffic is suspicious but ambiguous.
+                        # (If payload is None here, CNN will return 0.0 gracefully).
                         try:
                             cnn_score = analyze_payload(payload_bytes or b"")
                             log_event(
@@ -821,10 +845,10 @@ class PredictionEngine:
                                 if_score=float(anomaly_score),
                                 cnn_score=cnn_score,
                             )
-                            # If CNN is confident it's normal, suppress
+                            # If CNN is confident it's normal (score < 0.30), suppress the anomaly.
                             if cnn_score < 0.30:
                                 continue
-                            # If CNN confirms attack, force anomaly flag
+                            # If CNN confirms attack (score >= 0.65), force anomaly flag (prediction = -1).
                             if cnn_score >= 0.65:
                                 prediction = -1
                         except Exception as cnn_err:
@@ -834,7 +858,8 @@ class PredictionEngine:
                                 level="warning",
                                 error=str(cnn_err),
                             )
-                    # RoutingPath.IF_ONLY → fall through to normal IF logic
+                    # RoutingPath.IF_ONLY → fall through to normal IF logic.
+                    # In this case, we trust the initial IsolationForest verdict.
                 # ──────────────────────────────────────────────────────────
 
                 is_trusted = False
@@ -845,7 +870,8 @@ class PredictionEngine:
                         is_trusted = True
 
                 if is_trusted:
-                    # Trusted IP (Active Learning Feedback) - suppress alert
+                    # Trusted IP (Active Learning Feedback) - suppress alert.
+                    # This mechanism allows operators to whitelist specific IPs that generated false positives.
                     log_event(
                         logger,
                         "anomaly_suppressed_trusted_ip",
