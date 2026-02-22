@@ -14,6 +14,7 @@ from .collector import CaptureEngine, InterfaceMonitor
 from .config import RetinaConfig
 from .csv_rotator import FirebaseCSVStager, MythologicalCSVRotator
 from .health_monitor import HealthMonitor
+from .notifications import AlertNotificationDispatcher
 
 
 class RetinaDaemon:
@@ -32,6 +33,7 @@ class RetinaDaemon:
         self._csv_stager: Optional[FirebaseCSVStager] = None
         self._firebase_uploader: Optional[FirebaseUploader] = None
         self._health_monitor: Optional[HealthMonitor] = None
+        self._alert_notifier: Optional[AlertNotificationDispatcher] = None
         
         # Control
         self._running = False
@@ -216,6 +218,9 @@ class RetinaDaemon:
             enable_drop_monitoring=self.config.health.enable_drop_monitoring,
             enable_queue_monitoring=self.config.health.enable_queue_monitoring,
         )
+
+        # Initialize alert notification dispatcher
+        self._alert_notifier = AlertNotificationDispatcher(self.config.alerts)
     
     def _setup_health_callbacks(self) -> None:
         """Set up health monitoring callbacks."""
@@ -247,12 +252,17 @@ class RetinaDaemon:
                 f"Health alert [{alert.severity}]: {alert.message}"
             )
             
-            # TODO: Could add additional alert mechanisms here
-            # (email, webhook, etc.)
+            # Dispatch notifications
+            if self._alert_notifier:
+                self._alert_notifier.notify(alert)
         
         def on_alert_resolved(alert):
             """Handle resolved alerts."""
             self.logger.info(f"Health alert resolved: {alert.alert_type}")
+
+            # Dispatch notifications
+            if self._alert_notifier:
+                self._alert_notifier.notify(alert)
         
         def on_interface_available(interface: str, available: bool):
             """Handle interface availability changes."""

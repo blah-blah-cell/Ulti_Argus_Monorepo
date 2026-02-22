@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from ..oracle_core.anonymize import AnonymizationConfig
 from ..oracle_core.validation import (
@@ -187,6 +187,100 @@ class FirebaseConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class EmailConfig:
+    """Email alert configuration."""
+
+    enabled: bool = False
+    smtp_server: str = "localhost"
+    smtp_port: int = 25
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    from_address: str = "argus-v@example.com"
+    to_addresses: list[str] = field(default_factory=list)
+
+    @staticmethod
+    def from_mapping(data: Mapping[str, Any], *, path: str, env: Mapping[str, str]) -> "EmailConfig":
+        enabled = as_bool(get_optional(data, "enabled", default=False), path=f"{path}.enabled")
+        smtp_server = require_non_empty_str(get_optional(data, "smtp_server", default="localhost"), path=f"{path}.smtp_server")
+        smtp_port = require_positive_int(get_optional(data, "smtp_port", default=25), path=f"{path}.smtp_port")
+
+        smtp_user = get_optional(data, "smtp_user", default=None)
+        if smtp_user is not None:
+            smtp_user = require_non_empty_str(smtp_user, path=f"{path}.smtp_user")
+
+        smtp_password_raw = get_optional(data, "smtp_password", default=None)
+        smtp_password = None
+        if smtp_password_raw is not None:
+            if isinstance(smtp_password_raw, str) and smtp_password_raw.startswith("${") and smtp_password_raw.endswith("}"):
+                var_name = smtp_password_raw[2:-1]
+                smtp_password = env.get(var_name, smtp_password_raw)
+            else:
+                smtp_password = str(smtp_password_raw)
+
+        from_address = require_non_empty_str(get_optional(data, "from_address", default="argus-v@example.com"), path=f"{path}.from_address")
+
+        to_addresses_raw = get_optional(data, "to_addresses", default=[])
+        if not isinstance(to_addresses_raw, list):
+            raise ValidationError([ValidationIssue(f"{path}.to_addresses", "must be a list")])
+        to_addresses = [require_non_empty_str(addr, path=f"{path}.to_addresses[{i}]") for i, addr in enumerate(to_addresses_raw)]
+
+        return EmailConfig(
+            enabled=enabled,
+            smtp_server=smtp_server,
+            smtp_port=smtp_port,
+            smtp_user=smtp_user,
+            smtp_password=smtp_password,
+            from_address=from_address,
+            to_addresses=to_addresses,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WebhookConfig:
+    """Webhook alert configuration."""
+
+    enabled: bool = False
+    url: str = ""
+    method: str = "POST"
+    headers: dict[str, str] = field(default_factory=dict)
+
+    @staticmethod
+    def from_mapping(data: Mapping[str, Any], *, path: str) -> "WebhookConfig":
+        enabled = as_bool(get_optional(data, "enabled", default=False), path=f"{path}.enabled")
+        url = get_optional(data, "url", default="")
+        if enabled and not url:
+            raise ValidationError([ValidationIssue(f"{path}.url", "must be provided if webhook is enabled")])
+
+        method = require_non_empty_str(get_optional(data, "method", default="POST"), path=f"{path}.method")
+        headers = as_mapping(get_optional(data, "headers", default={}), path=f"{path}.headers")
+
+        return WebhookConfig(
+            enabled=enabled,
+            url=url,
+            method=method,
+            headers={str(k): str(v) for k, v in headers.items()},
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AlertsConfig:
+    """Alert mechanisms configuration."""
+
+    email: EmailConfig = field(default_factory=EmailConfig)
+    webhook: WebhookConfig = field(default_factory=WebhookConfig)
+
+    @staticmethod
+    def from_mapping(data: Mapping[str, Any], *, path: str, env: Mapping[str, str]) -> "AlertsConfig":
+        email_data = as_mapping(get_optional(data, "email", default={}), path=f"{path}.email")
+        email = EmailConfig.from_mapping(email_data, path=f"{path}.email", env=env)
+
+        webhook_data = as_mapping(get_optional(data, "webhook", default={}), path=f"{path}.webhook")
+        webhook = WebhookConfig.from_mapping(webhook_data, path=f"{path}.webhook")
+
+        return AlertsConfig(email=email, webhook=webhook)
+
+
+@dataclass(frozen=True, slots=True)
 class RetinaConfig:
     """Complete retina configuration."""
     
@@ -195,6 +289,7 @@ class RetinaConfig:
     health: HealthConfig
     anonymization: AnonymizationConfig
     firebase: FirebaseConfig = field(default_factory=FirebaseConfig)
+    alerts: AlertsConfig = field(default_factory=AlertsConfig)
     enabled: bool = True
     
     def ensure_output_dirs(self) -> None:
@@ -228,6 +323,10 @@ class RetinaConfig:
         firebase_data = as_mapping(get_optional(retina_data, "firebase", default={}), path="$.retina.firebase")
         firebase = FirebaseConfig.from_mapping(firebase_data, path="$.retina.firebase")
 
+        # Load alerts config
+        alerts_data = as_mapping(get_optional(retina_data, "alerts", default={}), path="$.retina.alerts")
+        alerts = AlertsConfig.from_mapping(alerts_data, path="$.retina.alerts", env=env)
+
         # Load anonymization config
         anon_salt_raw = get_optional(retina_data, "ip_salt", default="default_salt_change_in_production")
         if isinstance(anon_salt_raw, str):
@@ -247,5 +346,6 @@ class RetinaConfig:
             health=health,
             anonymization=anonymization,
             firebase=firebase,
+            alerts=alerts,
             enabled=enabled,
         )
