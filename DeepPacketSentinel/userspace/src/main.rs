@@ -57,7 +57,10 @@ async fn main() -> Result<()> {
     }
 
     // Attach XDP program
-    let program: &mut Xdp = bpf.program_mut("xdp_firewall").unwrap().try_into()?;
+    let program: &mut Xdp = bpf
+        .program_mut("xdp_firewall")
+        .context("program 'xdp_firewall' not found")?
+        .try_into()?;
     program.load()?;
     program
         .attach(&opt.iface, XdpFlags::SKB_MODE)
@@ -66,15 +69,15 @@ async fn main() -> Result<()> {
     info!("DeepPacketSentinel attached to interface: {}", opt.iface);
 
     // Initialize Maps
-    let block_map = bpf.take_map("BLOCKLIST").expect("BLOCKLIST map not found");
+    let block_map = bpf.take_map("BLOCKLIST").context("BLOCKLIST map not found")?;
     let blocklist = Arc::new(Mutex::new(HashMap::try_from(block_map)?));
 
     let rate_map = bpf
         .take_map("RATE_LIMIT")
-        .expect("RATE_LIMIT map not found");
+        .context("RATE_LIMIT map not found")?;
     let rate_limit = Arc::new(Mutex::new(HashMap::try_from(rate_map)?));
 
-    let ring_map = bpf.take_map("TELEMETRY").expect("TELEMETRY map not found");
+    let ring_map = bpf.take_map("TELEMETRY").context("TELEMETRY map not found")?;
     let mut ring_buf = RingBuf::try_from(ring_map)?;
 
     // Initialize Engines
