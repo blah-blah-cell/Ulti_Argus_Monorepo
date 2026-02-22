@@ -437,11 +437,11 @@ Examples:
                     return 0
                 
                 # Start as daemon
-                import daemon
-                import daemon.pidfile
+                import daemon as python_daemon
+                import daemon.pidfile as python_daemon_pidfile
                 
-                with daemon.DaemonContext(
-                    pidfile=daemon.pidfile.PIDLockFile(pid_file),
+                with python_daemon.DaemonContext(
+                    pidfile=python_daemon_pidfile.PIDLockFile(pid_file),
                     signal_map={
                         signal.SIGTERM: daemon.shutdown_requested,
                         signal.SIGINT: daemon.shutdown_requested,
