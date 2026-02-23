@@ -1,0 +1,35 @@
+#cloud-config
+
+packages:
+  - build-essential
+  - python3-pip
+  - python3.11
+  - python3.11-venv
+  - python3.11-dev
+  - curl
+  - git
+  - software-properties-common
+
+runcmd:
+  # Add Deadsnakes PPA to ensure Python 3.11 availability
+  - add-apt-repository -y ppa:deadsnakes/ppa
+  - apt-get update
+  # Ensure the specific Python packages are installed
+  - apt-get install -y python3.11 python3.11-venv python3.11-dev
+
+  # Clone the repository
+  # NOTE: Replace the URL below with your actual repository URL
+  - echo "Cloning Ulti_Argus_Monorepo..."
+  - git clone https://github.com/UltiArgus/Ulti_Argus_Monorepo.git /opt/Ulti_Argus_Monorepo
+
+  # Run install.sh
+  - cd /opt/Ulti_Argus_Monorepo
+  - chmod +x install.sh
+  - echo "Running install.sh with PYTHON_BIN=python3.11..."
+  - export HOME=/root
+  - export PYTHON_BIN=python3.11
+  - ./install.sh
+
+  # Ensure services are started
+  - systemctl start argus-sentinel
+  - systemctl start argus-brain
