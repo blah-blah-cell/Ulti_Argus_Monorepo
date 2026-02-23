@@ -1,23 +1,25 @@
 use anyhow::{Context, Result};
 use aya::{
-    maps::{HashMap, RingBuf},
+    maps::{HashMap, PerCpuArray, RingBuf},
     programs::{Xdp, XdpFlags},
     Ebpf,
 };
 use aya_log::EbpfLogger;
 use clap::Parser;
 use common::{FlowMetadata, TokenBucket};
-use log::{error, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
 use tokio::sync::Mutex;
+use tracing::{error, info, warn};
+use tracing_subscriber::FmtSubscriber;
 
 mod engine;
 use engine::normalization::Normalizer;
 use engine::policy::PolicyEngine;
 use engine::protocol::{MockProtocolEngine, ProtocolEngine};
 use engine::kronos_sender::{new_shared_sender, SharedKronosSender, DEFAULT_SOCKET_PATH};
+use engine::stats::{PerCpuStatsProvider, StatsExporter};
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -30,11 +32,19 @@ struct Opt {
     /// Unix socket path for Kronos IPC (set to empty string to disable).
     #[clap(long, default_value = DEFAULT_SOCKET_PATH)]
     kronos_socket: String,
+
+    /// Unix socket path for Stats Exporter.
+    #[clap(long, default_value = "/tmp/dps_stats.sock")]
+    stats_socket: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    // Initialize tracing
+    FmtSubscriber::builder()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
     let opt = Opt::parse();
 
     info!("Loading eBPF program...");
@@ -80,10 +90,25 @@ async fn main() -> Result<()> {
     let ring_map = bpf.take_map("TELEMETRY").context("TELEMETRY map not found")?;
     let mut ring_buf = RingBuf::try_from(ring_map)?;
 
+    let perf_map = bpf.take_map("PERF_STATS").context("PERF_STATS map not found")?;
+    let perf_stats = PerCpuArray::try_from(perf_map)?;
+
+    let xsk_map_data = bpf.take_map("XSK_MAP").context("XSK_MAP map not found")?;
+    let xsk_map = aya::maps::XskMap::try_from(xsk_map_data)?;
+
     // Initialize Engines
+    engine::fast_path::setup_af_xdp(xsk_map, &opt.iface)?;
+
     let policy_engine =
         Arc::new(PolicyEngine::new(&opt.redis).await.context("Failed to connect to Redis")?);
     let protocol_engine = Arc::new(MockProtocolEngine::new());
+
+    // Start Stats Exporter
+    let stats_provider = PerCpuStatsProvider::new(perf_stats);
+    let stats_exporter = StatsExporter::new(stats_provider, &opt.stats_socket);
+    tokio::spawn(async move {
+        stats_exporter.run().await;
+    });
 
     info!("Engines initialized. Starting Control Loop...");
 

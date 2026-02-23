@@ -11,15 +11,21 @@ import json
 import logging
 import os
 import signal
+import sqlite3
 import sys
 import threading
 import time
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
+import numpy as np
 import yaml
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
+import uvicorn
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from pydantic import BaseModel
 
 from ..oracle_core.config import ValidationError
 from ..oracle_core.logging import configure_logging, log_event
@@ -46,6 +52,137 @@ AEGIS_INFERENCE_LATENCY = Histogram('aegis_inference_latency_seconds', 'Inferenc
 AEGIS_MODEL_ACCURACY = Gauge('aegis_model_accuracy', 'Current model accuracy score')
 
 
+# API Models
+class BlockRequest(BaseModel):
+    reason: str = "Manual blacklist"
+    risk_level: str = "medium"
+    ttl_hours: Optional[int] = None
+
+
+app = FastAPI(title="Aegis Daemon API")
+
+
+@app.post("/api/whitelist/{ip}")
+async def whitelist_ip(ip: str):
+    """Manually whitelist an IP address."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('blacklist_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or BlacklistManager not available")
+
+    success = daemon._components['blacklist_manager'].remove_from_blacklist(ip, source="manual")
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to whitelist IP")
+    return {"message": f"IP {ip} whitelisted"}
+
+
+@app.post("/api/blacklist/{ip}")
+async def blacklist_ip(ip: str, request: BlockRequest):
+    """Manually blacklist an IP address."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('blacklist_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or BlacklistManager not available")
+
+    success = daemon._components['blacklist_manager'].add_to_blacklist(
+        ip_address=ip,
+        reason=request.reason,
+        risk_level=request.risk_level,
+        ttl_hours=request.ttl_hours,
+        source="manual",
+        enforce=True
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to blacklist IP")
+    return {"message": f"IP {ip} blacklisted"}
+
+
+@app.post("/api/retrain")
+async def trigger_retrain():
+    """Trigger emergency model retraining."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('feedback_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or FeedbackManager not available")
+
+    success = daemon._components['feedback_manager'].trigger_retrain()
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to trigger retraining")
+    return {"message": "Retraining triggered"}
+
+
+@app.get("/api/status")
+async def get_status():
+    """Get daemon health status."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon:
+        raise HTTPException(status_code=503, detail="Daemon not available")
+    return daemon.get_health_status()
+
+
+@app.get("/api/metrics")
+async def get_metrics():
+    """Get live telemetry data."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon:
+        raise HTTPException(status_code=503, detail="Daemon not available")
+
+    # Combine daemon stats and component stats
+    stats = daemon._stats.copy()
+
+    # Add prediction stats if available
+    prediction_engine = daemon._components.get('prediction_engine')
+    if prediction_engine:
+        stats['prediction_engine'] = prediction_engine.get_statistics()
+
+    return stats
+
+
+@app.get("/api/blacklist")
+async def get_blacklist(active_only: bool = True, limit: int = 15):
+    """Get list of blacklisted IPs."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('blacklist_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or BlacklistManager not available")
+
+    entries = daemon._components['blacklist_manager'].get_blacklist_entries(
+        active_only=active_only,
+        limit=limit
+    )
+    return list(entries)
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for live updates."""
+    await websocket.accept()
+    daemon = getattr(app.state, "daemon", None)
+    try:
+        while True:
+            if daemon:
+                # Gather data
+                prediction_engine = daemon._components.get('prediction_engine')
+                pe_stats = prediction_engine.get_statistics() if prediction_engine else {}
+
+                # Try to get active blocks count
+                blacklist_manager = daemon._components.get('blacklist_manager')
+                active_blocks = blacklist_manager._stats.get('active_entries', 0) if blacklist_manager else 0
+
+                data = {
+                    "health": daemon.get_health_status(),
+                    "stats": daemon._stats,
+                    "prediction_stats": pe_stats,
+                    "active_blocks": active_blocks,
+                    "timestamp": datetime.now().isoformat()
+                }
+                await websocket.send_json(data)
+            else:
+                await websocket.send_json({"error": "Daemon not ready"})
+
+            await asyncio.sleep(1)  # Update every second
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+
+
 class AegisDaemonError(Exception):
     """Base exception for Aegis daemon operations."""
     pass
@@ -64,6 +201,169 @@ class ServiceStopError(AegisDaemonError):
 class HealthCheckError(AegisDaemonError):
     """Exception raised when health check fails."""
     pass
+
+
+class OnlineLearningThread(threading.Thread):
+    """Background thread for continuous online learning."""
+
+    def __init__(self, prediction_engine: PredictionEngine, db_path: Path):
+        """Initialize online learning thread.
+
+        Args:
+            prediction_engine: Reference to the prediction engine.
+            db_path: Path to the SQLite database for buffering.
+        """
+        super().__init__(name="Aegis-OnlineLearning", daemon=True)
+        self.prediction_engine = prediction_engine
+        self.db_path = db_path
+        self._stop_event = threading.Event()
+        self.batch_size_trigger = 1000
+
+    def run(self) -> None:
+        """Run the online learning loop."""
+        log_event(logger, "online_learning_thread_started", db_path=str(self.db_path))
+
+        # Ensure DB directory exists
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            log_event(logger, "online_learning_db_dir_error", error=str(e))
+            return
+
+        while not self._stop_event.is_set():
+            try:
+                # Sleep for 5 minutes (interruptible)
+                if self._stop_event.wait(300):
+                    break
+
+                self._process_buffer()
+
+            except Exception as e:
+                log_event(logger, "online_learning_loop_error", error=str(e))
+                # Prevent tight loop on error
+                time.sleep(60)
+
+    def _process_buffer(self) -> None:
+        """Process buffered events and trigger training if ready."""
+        # 1. Drain queue
+        events = []
+        try:
+            while not self.prediction_engine.borderline_events_queue.empty():
+                events.append(self.prediction_engine.borderline_events_queue.get_nowait())
+        except Exception:
+            pass
+
+        if not events and not self.db_path.exists():
+            return
+
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Create table if needed
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS learning_buffer (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    features TEXT,
+                    score REAL,
+                    timestamp TEXT
+                )
+            """)
+
+            # Insert new events
+            if events:
+                data_to_insert = [
+                    (json.dumps(e['features']), e['score'], e['timestamp'])
+                    for e in events
+                ]
+                cursor.executemany(
+                    "INSERT INTO learning_buffer (features, score, timestamp) VALUES (?, ?, ?)",
+                    data_to_insert
+                )
+                conn.commit()
+                log_event(logger, "online_learning_buffer_updated", new_events=len(events))
+
+            # Check buffer size
+            cursor.execute("SELECT COUNT(*) FROM learning_buffer")
+            count = cursor.fetchone()[0]
+
+            if count >= self.batch_size_trigger:
+                self._trigger_partial_fit(conn, count)
+
+        except Exception as e:
+            log_event(logger, "online_learning_db_error", error=str(e))
+        finally:
+            if conn:
+                conn.close()
+
+    def _trigger_partial_fit(self, conn: sqlite3.Connection, count: int) -> None:
+        """Trigger partial fit on the model using buffered data."""
+        try:
+            # Fetch data
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, features FROM learning_buffer ORDER BY id ASC LIMIT ?",
+                (self.batch_size_trigger,)
+            )
+            rows = cursor.fetchall()
+
+            if not rows:
+                return
+
+            ids = [r[0] for r in rows]
+            feature_list = [json.loads(r[1]) for r in rows]
+
+            # Convert to DataFrame/Array
+            # We need to ensure correct column order matching the model
+            feature_columns = self.prediction_engine.model_manager.feature_columns
+
+            X = []
+            for f_dict in feature_list:
+                row_vector = [f_dict.get(col, 0) for col in feature_columns]
+                X.append(row_vector)
+
+            X_arr = np.array(X)
+
+            # Access the model (thread-safe access would be ideal, but partial_fit handles internal state)
+            # We acquire the lock to prevent swapping during update
+            with self.prediction_engine._model_lock:
+                model = self.prediction_engine.model_manager._model
+
+                if model is None:
+                    log_event(logger, "online_learning_skipped_no_model")
+                    return
+
+                updated = False
+                if hasattr(model, "partial_fit"):
+                    model.partial_fit(X_arr)
+                    updated = True
+                    log_event(logger, "online_learning_partial_fit_applied", sample_count=len(X_arr))
+                elif hasattr(model, "warm_start") and getattr(model, "warm_start", False):
+                    # For IsolationForest with warm_start=True, fit adds more trees
+                    model.fit(X_arr)
+                    updated = True
+                    log_event(logger, "online_learning_warm_start_fit_applied", sample_count=len(X_arr))
+                else:
+                    log_event(logger, "online_learning_model_not_supported")
+
+            # Clean up buffer regardless of success to prevent stuck queue?
+            # Or only on success? If model doesn't support it, we should probably clear to avoid infinite growth.
+            # If update failed due to error, we might want to retry, but for "not supported", we clear.
+            # Let's clear the processed rows.
+
+            placeholders = ','.join(['?'] * len(ids))
+            cursor.execute(f"DELETE FROM learning_buffer WHERE id IN ({placeholders})", ids)
+            conn.commit()
+
+            log_event(logger, "online_learning_buffer_cleared", count=len(ids))
+
+        except Exception as e:
+            log_event(logger, "online_learning_update_failed", error=str(e))
+
+    def stop(self) -> None:
+        """Stop the online learning thread."""
+        self._stop_event.set()
 
 
 class AegisDaemon:
@@ -104,6 +404,7 @@ class AegisDaemon:
         self._running = False
         self._shutdown_event = threading.Event()
         self._start_time = None
+        self._api_server = None  # Uvicorn server instance
         self._components = {
             'anonymizer': None,
             'model_manager': None,
@@ -111,7 +412,8 @@ class AegisDaemon:
             'feedback_manager': None,
             'kronos_router': None,
             'ipc_listener': None,
-            'prediction_engine': None
+            'prediction_engine': None,
+            'online_learning_thread': None
         }
         
         # Statistics and monitoring
@@ -383,6 +685,22 @@ class AegisDaemon:
                 self._start_time = datetime.now()
                 self._stats['service_start_time'] = self._start_time.isoformat()
 
+                # Start API Server
+                try:
+                    app.state.daemon = self
+                    config = uvicorn.Config(app, host="127.0.0.1", port=8081, log_level="info", loop="asyncio")
+                    self._api_server = uvicorn.Server(config)
+
+                    api_thread = threading.Thread(
+                        target=self._api_server.run,
+                        name="Aegis-API",
+                        daemon=True
+                    )
+                    api_thread.start()
+                    log_event(logger, "api_server_started", port=8081)
+                except Exception as e:
+                    log_event(logger, "api_server_start_failed", level="error", error=str(e))
+
                 # Start background monitoring thread
                 monitor_thread = threading.Thread(
                     target=self._monitoring_loop,
@@ -405,6 +723,18 @@ class AegisDaemon:
                     log_event(logger, "prometheus_exporter_started", port=9090)
                 except Exception as e:
                     log_event(logger, "prometheus_exporter_failed", error=str(e), level="error")
+
+                # Start Online Learning Thread
+                try:
+                    feedback_dir = Path(self.config.enforcement.feedback_dir)
+                    ol_thread = OnlineLearningThread(
+                        prediction_engine=prediction_engine,
+                        db_path=feedback_dir / "online_learning.db"
+                    )
+                    ol_thread.start()
+                    self._components['online_learning_thread'] = ol_thread
+                except Exception as ol_err:
+                    log_event(logger, "online_learning_start_failed", error=str(ol_err))
 
                 log_event(
                     logger,
@@ -466,6 +796,14 @@ class AegisDaemon:
             
             shutdown_errors = []
 
+            # Stop API server
+            try:
+                if self._api_server:
+                    self._api_server.should_exit = True
+                    log_event(logger, "api_server_stopping")
+            except Exception as e:
+                log_event(logger, "api_server_stop_failed", level="warning", error=str(e))
+
             # Stop prediction engine
             try:
                 prediction_engine = self._components.get('prediction_engine')
@@ -490,6 +828,16 @@ class AegisDaemon:
                 log_event(logger, "ipc_listener_stop_failed", level="warning", error=str(e))
                 shutdown_errors.append(f"ipc_listener_error: {e}")
             
+            # Stop Online Learning Thread
+            try:
+                ol_thread = self._components.get('online_learning_thread')
+                if ol_thread:
+                    ol_thread.stop()
+                    ol_thread.join(timeout=5)
+            except Exception as e:
+                log_event(logger, "online_learning_stop_failed", level="warning", error=str(e))
+                shutdown_errors.append(f"online_learning_error: {e}")
+
             # Wait for monitoring thread to notice _running=False
             time.sleep(1)
             
