@@ -28,6 +28,8 @@ Rust sender (see DeepPacketSentinel/src/ipc/mod.rs).
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import queue
@@ -89,19 +91,30 @@ class IPCListener:
     Args:
         socket_path: Path to the Unix domain socket file.
         queue_max:   Maximum frames to buffer before dropping oldest.
+        secret_key:  Secret key for HMAC-SHA256 validation of frames.
     """
 
     def __init__(
         self,
         socket_path: str = _DEFAULT_SOCKET_PATH,
         queue_max: int = _QUEUE_MAX,
+        secret_key: Optional[str] = None,
     ):
         self.socket_path = socket_path
         self._queue: queue.Queue[FlowFrame] = queue.Queue(maxsize=queue_max)
+        self.secret_key = secret_key.encode("utf-8") if secret_key else None
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._dropped = 0
         self._received = 0
+
+        if not self.secret_key:
+            log_event(
+                logger,
+                "ipc_listener_no_secret_key",
+                level="warning",
+                message="No secret key provided. All frames will be rejected.",
+            )
 
         log_event(
             logger,
@@ -161,6 +174,19 @@ class IPCListener:
 
     def qsize(self) -> int:
         return self._queue.qsize()
+
+    def _validate_hmac(self, message: bytes, received_hmac: str) -> bool:
+        """Validate HMAC-SHA256 signature of the message."""
+        if not self.secret_key:
+            return False
+
+        try:
+            computed_hmac = hmac.new(
+                self.secret_key, message, hashlib.sha256
+            ).hexdigest()
+            return hmac.compare_digest(computed_hmac, received_hmac)
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # Internal
@@ -224,7 +250,30 @@ class IPCListener:
                             size=len(line),
                         )
                         continue
-                    self._parse_and_enqueue(line)
+
+                    # HMAC validation: expect <HMAC>:<PAYLOAD>
+                    if b":" not in line:
+                        log_event(logger, "ipc_frame_missing_hmac", level="warning")
+                        continue
+
+                    try:
+                        hmac_part, payload_part = line.split(b":", 1)
+                        hmac_str = hmac_part.decode("utf-8")
+
+                        if not self._validate_hmac(payload_part, hmac_str):
+                            log_event(
+                                logger, "ipc_hmac_verification_failed", level="error"
+                            )
+                            continue
+
+                        self._parse_and_enqueue(payload_part)
+                    except Exception as e:
+                        log_event(
+                            logger,
+                            "ipc_frame_processing_error",
+                            level="error",
+                            error=str(e),
+                        )
         except Exception as e:
             if self._running:
                 log_event(

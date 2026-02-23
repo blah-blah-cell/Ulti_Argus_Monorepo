@@ -9,14 +9,16 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import queue
 import sqlite3
 import subprocess
 import threading
-from collections import Counter
+from collections import Counter, OrderedDict
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Generator, Iterator, List, Optional, Tuple
 
 try:
     import firebase_admin
@@ -59,6 +61,83 @@ class EnforcementError(BlacklistError):
     pass
 
 
+class SQLiteConnectionPool:
+    """Thread-safe connection pool for SQLite."""
+
+    def __init__(self, database: str, max_connections: int = 5, **kwargs):
+        self.database = database
+        self.max_connections = max_connections
+        self.kwargs = kwargs
+        self._pool = queue.Queue(maxsize=max_connections)
+        self._created_connections = 0
+        self._lock = threading.Lock()
+
+    @contextmanager
+    def connection(self) -> Generator[sqlite3.Connection, None, None]:
+        conn = None
+        try:
+            # Try to get from pool
+            try:
+                conn = self._pool.get(block=False)
+            except queue.Empty:
+                # If empty, check if we can create new
+                with self._lock:
+                    if self._created_connections < self.max_connections:
+                        conn = self._create_connection()
+                        self._created_connections += 1
+
+                # If we still don't have a connection (max reached), wait
+                if conn is None:
+                    conn = self._pool.get(timeout=30)
+
+            yield conn
+        finally:
+            if conn:
+                self._pool.put(conn)
+
+    def _create_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.database, **self.kwargs)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+
+
+class TTLCache:
+    """Simple TTL cache with LRU eviction."""
+
+    def __init__(self, ttl_seconds: int = 300, maxsize: int = 1000):
+        self.ttl_seconds = ttl_seconds
+        self.maxsize = maxsize
+        self._cache = OrderedDict()  # key -> (value, expiry_timestamp)
+        self._lock = threading.Lock()
+
+    def get(self, key: str) -> Optional[Any]:
+        with self._lock:
+            if key in self._cache:
+                value, expiry = self._cache[key]
+                if datetime.now().timestamp() < expiry:
+                    # Move to end (LRU)
+                    self._cache.move_to_end(key)
+                    return value
+                else:
+                    del self._cache[key]
+        return None
+
+    def set(self, key: str, value: Any):
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            elif len(self._cache) >= self.maxsize:
+                self._cache.popitem(last=False)  # Remove first (oldest)
+
+            expiry = datetime.now().timestamp() + self.ttl_seconds
+            self._cache[key] = (value, expiry)
+
+    def clear(self):
+        with self._lock:
+            self._cache.clear()
+
+
 class BlacklistManager:
     """Manages decentralized blacklist storage with Firebase sync."""
     
@@ -98,29 +177,20 @@ class BlacklistManager:
         self._iptables_available: Optional[bool] = None
         self._kronos_enforcer = KronosEnforcer() if _KRONOS_AVAILABLE else None
 
-        # Thread-local storage for SQLite connections
-        self._local = threading.local()
+        # Connection pool and caching
+        self.pool = SQLiteConnectionPool(
+            str(self._sqlite_db_path), check_same_thread=False
+        )
+        self.cache = TTLCache(ttl_seconds=300, maxsize=10000)
 
         # Buffered stats
         self._pending_hits = Counter()
         self._pending_hits_lock = threading.Lock()
+        self._stats_lock = threading.Lock()
 
         # Initialize storage systems
         self._ensure_directories()
         self._initialize_database()
-
-        # Initialize lookup cache to avoid database hits for frequent IPs
-        # NOTE: caching _check_db_status instead of is_blacklisted to allow side effects (stats)
-        self._check_db_status = lru_cache(maxsize=1024)(self._check_db_status)
-    
-    def _get_connection(self) -> sqlite3.Connection:
-        """Get thread-local SQLite connection."""
-        if not hasattr(self._local, 'conn'):
-            self._local.conn = sqlite3.connect(self._sqlite_db_path)
-            # Enable Write-Ahead Logging for better concurrency
-            self._local.conn.execute("PRAGMA journal_mode=WAL")
-            self._local.conn.execute("PRAGMA synchronous=NORMAL")
-        return self._local.conn
 
     def _ensure_directories(self) -> None:
         """Ensure required directories exist."""
@@ -142,12 +212,12 @@ class BlacklistManager:
     def _initialize_database(self) -> None:
         """Initialize SQLite database and create tables."""
         try:
-            conn = self._get_connection()
-            with conn:
-                cursor = conn.cursor()
-                
-                # Main blacklist table
-                cursor.execute("""
+            with self.pool.connection() as conn:
+                with conn:
+                    cursor = conn.cursor()
+
+                    # Main blacklist table
+                    cursor.execute("""
                     CREATE TABLE IF NOT EXISTS blacklist (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         ip_address TEXT NOT NULL,
@@ -247,41 +317,42 @@ class BlacklistManager:
                 anonymized_ip = self.anonymizer.anonymize_ip(ip_address)
             else:
                 anonymized_ip = ip_address
-            
-            conn = self._get_connection()
-            with conn:
-                cursor = conn.cursor()
-                
-                # Upsert blacklist entry
-                cursor.execute("""
-                    INSERT OR REPLACE INTO blacklist 
-                    (ip_address, reason, source, risk_level, expires_at, is_active, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    anonymized_ip, reason, source, risk_level, expires_at, True,
-                    json.dumps(metadata) if metadata else None
-                ))
-                
-                log_event(
-                    logger,
-                    "ip_added_to_blacklist",
-                    level="info",
-                    ip_address=ip_address,
-                    anonymized_ip=anonymized_ip,
-                    reason=reason,
-                    risk_level=risk_level,
-                    ttl_hours=ttl_hours,
-                    source=source
-                )
-                
-                # Clear lookup cache
-                self._check_db_status.cache_clear()
 
-                # Enforce immediately if requested
-                if enforce:
-                    return self._enforce_blacklist_entry(anonymized_ip, reason, risk_level)
-                
-                return True
+            with self.pool.connection() as conn:
+                with conn:
+                    cursor = conn.cursor()
+
+                    # Upsert blacklist entry
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO blacklist
+                        (ip_address, reason, source, risk_level, expires_at, is_active, metadata)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        anonymized_ip, reason, source, risk_level, expires_at, True,
+                        json.dumps(metadata) if metadata else None
+                    ))
+
+                    log_event(
+                        logger,
+                        "ip_added_to_blacklist",
+                        level="info",
+                        ip_address=ip_address,
+                        anonymized_ip=anonymized_ip,
+                        reason=reason,
+                        risk_level=risk_level,
+                        ttl_hours=ttl_hours,
+                        source=source,
+                    )
+
+            # Enforce immediately if requested
+            if enforce:
+                return self._enforce_blacklist_entry(anonymized_ip, reason, risk_level)
+
+            # Update cache (so subsequent lookups are fast)
+            # We don't need to clear cache entirely, just update/set the entry
+            self.cache.set(anonymized_ip, (expires_at, True, risk_level))
+
+            return True
                 
         except Exception as e:
             log_event(
@@ -309,44 +380,41 @@ class BlacklistManager:
                 anonymized_ip = self.anonymizer.anonymize_ip(ip_address)
             else:
                 anonymized_ip = ip_address
-            
-            conn = self._get_connection()
-            with conn:
-                cursor = conn.cursor()
-                
-                # Soft delete (mark as inactive)
-                cursor.execute("""
-                    UPDATE blacklist 
-                    SET is_active = FALSE, last_seen = CURRENT_TIMESTAMP
-                    WHERE ip_address = ? AND source = ?
-                """, (anonymized_ip, source))
-                
-                if cursor.rowcount == 0:
-                    raise BlacklistNotFoundError(f"IP {ip_address} not found in blacklist")
-                
-                # Remove from iptables if active
-                self._remove_from_iptables(anonymized_ip)
-                
-                # Remove from eBPF via Kronos
-                if self._kronos_enforcer:
-                    self._kronos_enforcer.unblock_ip(anonymized_ip)
-                
-                log_event(
-                    logger,
-                    "ip_removed_from_blacklist",
-                    level="info",
-                    ip_address=ip_address,
-                    anonymized_ip=anonymized_ip,
-                    source=source
-                )
-                
-                # Clear lookup cache
-                self._check_db_status.cache_clear()
-                
-                # Clear lookup cache
-                self.is_blacklisted.cache_clear()
 
-                return True
+            with self.pool.connection() as conn:
+                with conn:
+                    cursor = conn.cursor()
+
+                    # Soft delete (mark as inactive)
+                    cursor.execute("""
+                        UPDATE blacklist
+                        SET is_active = FALSE, last_seen = CURRENT_TIMESTAMP
+                        WHERE ip_address = ? AND source = ?
+                    """, (anonymized_ip, source))
+
+                    if cursor.rowcount == 0:
+                        raise BlacklistNotFoundError(f"IP {ip_address} not found in blacklist")
+
+                    # Remove from iptables if active
+                    self._remove_from_iptables(anonymized_ip)
+
+                    # Remove from eBPF via Kronos
+                    if self._kronos_enforcer:
+                        self._kronos_enforcer.unblock_ip(anonymized_ip)
+
+                    log_event(
+                        logger,
+                        "ip_removed_from_blacklist",
+                        level="info",
+                        ip_address=ip_address,
+                        anonymized_ip=anonymized_ip,
+                        source=source,
+                    )
+
+            # Invalidate cache entry
+            self.cache.set(anonymized_ip, (None, False, None))
+
+            return True
                 
         except BlacklistNotFoundError:
             log_event(
@@ -367,8 +435,10 @@ class BlacklistManager:
             )
             return False
     
-    def _check_db_status(self, anonymized_ip: str) -> Optional[Tuple[datetime | None, bool, str]]:
-        """Check status of IP in database (cached).
+    def _check_db_status(
+        self, anonymized_ip: str
+    ) -> Optional[Tuple[datetime | None, bool, str]]:
+        """Check status of IP in database.
 
         Args:
             anonymized_ip: Anonymized IP address
@@ -377,40 +447,40 @@ class BlacklistManager:
             Tuple (expires_at, is_active, risk_level) if found, else None
         """
         try:
-            conn = self._get_connection()
-            # No transaction needed for SELECT
-            cursor = conn.cursor()
+            with self.pool.connection() as conn:
+                cursor = conn.cursor()
 
-            cursor.execute("""
-                SELECT expires_at, is_active, risk_level
-                FROM blacklist
-                WHERE ip_address = ? AND is_active = TRUE
-            """, (anonymized_ip,))
+                cursor.execute(
+                    """
+                    SELECT expires_at, is_active, risk_level
+                    FROM blacklist
+                    WHERE ip_address = ? AND is_active = TRUE
+                """,
+                    (anonymized_ip,),
+                )
 
-            row = cursor.fetchone()
-            if not row:
-                return None
+                row = cursor.fetchone()
+                if not row:
+                    return None
 
-            expires_at, is_active, risk_level = row
-            if isinstance(expires_at, str):
-                try:
-                    expires_at = datetime.fromisoformat(expires_at)
-                except ValueError:
-                    # Fallback or log if format is weird?
-                    # Assuming ISO format from SQLite
-                    pass
+                expires_at, is_active, risk_level = row
+                if isinstance(expires_at, str):
+                    try:
+                        expires_at = datetime.fromisoformat(expires_at)
+                    except ValueError:
+                        pass
 
-            return (expires_at, bool(is_active), risk_level)
+                return (expires_at, bool(is_active), risk_level)
         except Exception as e:
             log_event(logger, "db_check_failed", level="error", error=str(e))
             return None
 
     def is_blacklisted(self, ip_address: str) -> bool:
         """Check if IP address is currently blacklisted.
-        
+
         Args:
             ip_address: IP address to check
-            
+
         Returns:
             True if IP is blacklisted and active
         """
@@ -419,31 +489,50 @@ class BlacklistManager:
                 anonymized_ip = self.anonymizer.anonymize_ip(ip_address)
             else:
                 anonymized_ip = ip_address
-            
-            result = self._check_db_status(anonymized_ip)
+
+            # Check memory cache first
+            result = self.cache.get(anonymized_ip)
+
+            if result is None:
+                # Cache miss, check database
+                result = self._check_db_status(anonymized_ip)
+                if result:
+                    self.cache.set(anonymized_ip, result)
 
             if not result:
                 return False
 
             expires_at, is_active, risk_level = result
 
+            if not is_active:
+                return False
+
             # Check if entry has expired
             if expires_at:
-                # expires_at is already a datetime object (or None) thanks to _check_db_status
                 if datetime.now() > expires_at:
-                    # We need to mark as inactive in DB.
-                    # Since this is a state change, we do it immediately to ensure consistency
-                    # and clear cache so subsequent calls see it as inactive.
-                    conn = self._get_connection()
-                    with conn:
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            UPDATE blacklist 
-                            SET is_active = FALSE 
-                            WHERE ip_address = ? AND expires_at < CURRENT_TIMESTAMP
-                        """, (anonymized_ip,))
+                    # Mark inactive in DB
+                    try:
+                        with self.pool.connection() as conn:
+                            with conn:
+                                cursor = conn.cursor()
+                                cursor.execute(
+                                    """
+                                    UPDATE blacklist
+                                    SET is_active = FALSE
+                                    WHERE ip_address = ? AND expires_at < CURRENT_TIMESTAMP
+                                """,
+                                    (anonymized_ip,),
+                                )
+                    except Exception as e:
+                        log_event(
+                            logger,
+                            "expiry_update_failed",
+                            level="error",
+                            error=str(e),
+                        )
 
-                    self._check_db_status.cache_clear()
+                    # Update cache to reflect inactivity
+                    self.cache.set(anonymized_ip, (expires_at, False, risk_level))
                     return False
 
             # Record hit in memory buffer
@@ -451,6 +540,7 @@ class BlacklistManager:
                 self._pending_hits[anonymized_ip] += 1
 
             return True
+
                 
         except Exception as e:
             log_event(
@@ -481,64 +571,63 @@ class BlacklistManager:
             Iterator of blacklist entry dictionaries
         """
         try:
-            conn = self._get_connection()
-            # No transaction needed for SELECT, but context manager is safe
-            cursor = conn.cursor()
+            with self.pool.connection() as conn:
+                cursor = conn.cursor()
 
-            query = """
-                SELECT ip_address, reason, source, risk_level, created_at,
-                        expires_at, is_active, enforcement_action, hit_count,
-                        last_seen, metadata
-                FROM blacklist
-            """
+                query = """
+                    SELECT ip_address, reason, source, risk_level, created_at,
+                            expires_at, is_active, enforcement_action, hit_count,
+                            last_seen, metadata
+                    FROM blacklist
+                """
 
-            conditions = []
-            params = []
+                conditions = []
+                params = []
 
-            if active_only:
-                conditions.append("is_active = TRUE")
+                if active_only:
+                    conditions.append("is_active = TRUE")
 
-            if risk_level:
-                conditions.append("risk_level = ?")
-                params.append(risk_level)
+                if risk_level:
+                    conditions.append("risk_level = ?")
+                    params.append(risk_level)
 
-            if source:
-                conditions.append("source = ?")
-                params.append(source)
+                if source:
+                    conditions.append("source = ?")
+                    params.append(source)
 
-            if conditions:
-                query += " WHERE " + " AND ".join(conditions)
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
 
-            query += " ORDER BY created_at DESC"
+                query += " ORDER BY created_at DESC"
 
-            if limit:
-                query += " LIMIT ?"
-                params.append(limit)
+                if limit:
+                    query += " LIMIT ?"
+                    params.append(limit)
 
-            cursor.execute(query, params)
+                cursor.execute(query, params)
 
-            # Using yield for memory efficiency
-            count = 0
-            while True:
-                row = cursor.fetchone()
-                if not row:
-                    break
-                
-                entry = {
-                    'ip_address': row[0],
-                    'reason': row[1],
-                    'source': row[2],
-                    'risk_level': row[3],
-                    'created_at': row[4],
-                    'expires_at': row[5],
-                    'is_active': bool(row[6]),
-                    'enforcement_action': row[7],
-                    'hit_count': row[8],
-                    'last_seen': row[9],
-                    'metadata': json.loads(row[10]) if row[10] else None
-                }
-                yield entry
-                count += 1
+                # Using yield for memory efficiency
+                count = 0
+                while True:
+                    row = cursor.fetchone()
+                    if not row:
+                        break
+
+                    entry = {
+                        "ip_address": row[0],
+                        "reason": row[1],
+                        "source": row[2],
+                        "risk_level": row[3],
+                        "created_at": row[4],
+                        "expires_at": row[5],
+                        "is_active": bool(row[6]),
+                        "enforcement_action": row[7],
+                        "hit_count": row[8],
+                        "last_seen": row[9],
+                        "metadata": json.loads(row[10]) if row[10] else None,
+                    }
+                    yield entry
+                    count += 1
 
             log_event(
                 logger,
@@ -572,22 +661,24 @@ class BlacklistManager:
             return
 
         try:
-            conn = self._get_connection()
-            with conn:
-                cursor = conn.cursor()
-                current_time = datetime.now()
+            with self.pool.connection() as conn:
+                with conn:
+                    cursor = conn.cursor()
+                    current_time = datetime.now()
 
-                # Batch update
-                updates = [
-                    (count, current_time, ip)
-                    for ip, count in hits_to_flush.items()
-                ]
+                    # Batch update
+                    updates = [
+                        (count, current_time, ip) for ip, count in hits_to_flush.items()
+                    ]
 
-                cursor.executemany("""
-                    UPDATE blacklist
-                    SET hit_count = hit_count + ?, last_seen = ?
-                    WHERE ip_address = ?
-                """, updates)
+                    cursor.executemany(
+                        """
+                        UPDATE blacklist
+                        SET hit_count = hit_count + ?, last_seen = ?
+                        WHERE ip_address = ?
+                    """,
+                        updates,
+                    )
 
             log_event(logger, "stats_flushed", count=len(updates))
         except Exception as e:
@@ -597,41 +688,53 @@ class BlacklistManager:
 
     def cleanup_expired_entries(self) -> int:
         """Clean up expired blacklist entries.
-        
+
         Returns:
             Number of entries cleaned up
         """
         self._flush_hits()  # Flush hits before cleanup
         try:
-            conn = self._get_connection()
-            with conn:
-                cursor = conn.cursor()
-                
-                cursor.execute("""
-                    UPDATE blacklist 
-                    SET is_active = FALSE 
-                    WHERE expires_at IS NOT NULL 
-                    AND expires_at < CURRENT_TIMESTAMP 
-                    AND is_active = TRUE
-                """)
-                
-                cleaned_count = cursor.rowcount
-                # conn.commit() via context manager
-                
-                if cleaned_count > 0:
-                    log_event(
-                        logger,
-                        "expired_blacklist_entries_cleaned",
-                        level="info",
-                        cleaned_count=cleaned_count
-                    )
-                    
-                    self._update_stats()
+            with self.pool.connection() as conn:
+                with conn:
+                    cursor = conn.cursor()
 
-                    # Clear lookup cache
-                    self._check_db_status.cache_clear()
-                
-                return cleaned_count
+                    cursor.execute(
+                        """
+                        UPDATE blacklist
+                        SET is_active = FALSE
+                        WHERE expires_at IS NOT NULL
+                        AND expires_at < CURRENT_TIMESTAMP
+                        AND is_active = TRUE
+                    """
+                    )
+
+                    cleaned_count = cursor.rowcount
+                    # conn.commit() via context manager
+
+                    if cleaned_count > 0:
+                        log_event(
+                            logger,
+                            "expired_blacklist_entries_cleaned",
+                            level="info",
+                            cleaned_count=cleaned_count,
+                        )
+
+                        self._update_stats()
+
+                        # Invalidate whole cache or selectively?
+                        # Since we don't know which IPs were cleaned without RETURNING clause,
+                        # clearing the cache is safer for consistency if many expired.
+                        # But TTLCache will expire them eventually anyway.
+                        # Let's clear to be safe and consistent with previous behavior.
+                        self.cache.clear()
+
+                    return cleaned_count
+
+        except Exception as e:
+            log_event(
+                logger, "cleanup_expired_entries_failed", level="error", error=str(e)
+            )
+            return 0
                 
         except Exception as e:
             log_event(
@@ -682,34 +785,38 @@ class BlacklistManager:
             
             # Upload to Firebase (simulated for now)
             success = self._upload_to_firebase(json_data, remote_path)
-            
+
             # Log sync operation
-            conn = self._get_connection()
-            with conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO sync_log 
-                    (operation, entry_count, success, error_message, remote_path)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (
-                    'sync_firebase',
-                    len(json_data.get('entries', [])),
-                    success,
-                    None if success else 'Upload failed',
-                    remote_path if success else None
-                ))
-            
+            with self.pool.connection() as conn:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT INTO sync_log
+                        (operation, entry_count, success, error_message, remote_path)
+                        VALUES (?, ?, ?, ?, ?)
+                    """,
+                        (
+                            "sync_firebase",
+                            len(json_data.get("entries", [])),
+                            success,
+                            None if success else "Upload failed",
+                            remote_path if success else None,
+                        ),
+                    )
+
             if success:
                 self._last_sync_time = datetime.now()
                 self._sync_failures = 0
-                self._stats['sync_operations'] += 1
-                
+                with self._stats_lock:
+                    self._stats["sync_operations"] += 1
+
                 log_event(
                     logger,
                     "firebase_sync_completed",
                     level="info",
                     remote_path=remote_path,
-                    entry_count=len(json_data.get('entries', []))
+                    entry_count=len(json_data.get("entries", [])),
                 )
             else:
                 self._sync_failures += 1
@@ -830,18 +937,19 @@ class BlacklistManager:
                 success_ebpf = self._kronos_enforcer.block_ip(ip_address)
             
             success = success_os or success_ebpf
-            
+
             if success:
-                self._stats['enforcement_actions'] += 1
+                with self._stats_lock:
+                    self._stats["enforcement_actions"] += 1
                 log_event(
                     logger,
                     "blacklist_enforcement_applied",
                     level="info",
                     ip_address=ip_address,
                     reason=reason,
-                    risk_level=risk_level
+                    risk_level=risk_level,
                 )
-            
+
             return success
             
         except Exception as e:
@@ -1016,83 +1124,93 @@ class BlacklistManager:
     def _update_stats(self) -> None:
         """Update internal statistics."""
         try:
-            conn = self._get_connection()
-            # No transaction needed for SELECT
-            cursor = conn.cursor()
+            with self.pool.connection() as conn:
+                cursor = conn.cursor()
 
-            cursor.execute("SELECT COUNT(*) FROM blacklist")
-            self._stats['total_entries'] = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM blacklist")
+                total = cursor.fetchone()[0]
 
-            cursor.execute("SELECT COUNT(*) FROM blacklist WHERE is_active = TRUE")
-            self._stats['active_entries'] = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM blacklist WHERE is_active = TRUE")
+                active = cursor.fetchone()[0]
 
-            cursor.execute("""
-                SELECT COUNT(*) FROM blacklist
-                WHERE is_active = FALSE
-                AND expires_at IS NOT NULL
-                AND expires_at < CURRENT_TIMESTAMP
-            """)
-            self._stats['expired_entries'] = cursor.fetchone()[0]
-                
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM blacklist
+                    WHERE is_active = FALSE
+                    AND expires_at IS NOT NULL
+                    AND expires_at < CURRENT_TIMESTAMP
+                """
+                )
+                expired = cursor.fetchone()[0]
+
+            with self._stats_lock:
+                self._stats["total_entries"] = total
+                self._stats["active_entries"] = active
+                self._stats["expired_entries"] = expired
+
         except Exception as e:
-            log_event(
-                logger,
-                "stats_update_failed",
-                level="error",
-                error=str(e)
-            )
+            log_event(logger, "stats_update_failed", level="error", error=str(e))
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get current blacklist statistics.
-        
+
         Returns:
             Dictionary containing statistics
         """
         self._flush_hits()
         self._update_stats()
-        
-        stats = self._stats.copy()
-        stats.update({
-            'last_sync_time': self._last_sync_time.isoformat() if self._last_sync_time else None,
-            'sync_failures': self._sync_failures,
-            'database_path': str(self._sqlite_db_path),
-            'firebase_enabled': self._firebase_sync_enabled
-        })
-        
+
+        with self._stats_lock:
+            stats = self._stats.copy()
+
+        stats.update(
+            {
+                "last_sync_time": self._last_sync_time.isoformat()
+                if self._last_sync_time
+                else None,
+                "sync_failures": self._sync_failures,
+                "database_path": str(self._sqlite_db_path),
+                "firebase_enabled": self._firebase_sync_enabled,
+            }
+        )
+
         return stats
     
     def emergency_stop(self, reason: str = "Manual emergency stop") -> bool:
         """Stop all enforcement actions immediately.
-        
+
         Args:
             reason: Reason for emergency stop
-            
+
         Returns:
             True if emergency stop activated successfully
         """
         try:
             # Create emergency stop file
-            Path(self.config.emergency_stop_file).parent.mkdir(parents=True, exist_ok=True)
-            Path(self.config.emergency_stop_file).touch()
-            
-            # Log emergency stop
-            conn = self._get_connection()
-            with conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO emergency_stops (reason, stopped_by)
-                    VALUES (?, ?)
-                """, (reason, "manual"))
-            
-            self._stats['emergency_stops'] += 1
-            
-            log_event(
-                logger,
-                "emergency_stop_activated",
-                level="critical",
-                reason=reason
+            Path(self.config.emergency_stop_file).parent.mkdir(
+                parents=True, exist_ok=True
             )
-            
+            Path(self.config.emergency_stop_file).touch()
+
+            # Log emergency stop
+            with self.pool.connection() as conn:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT INTO emergency_stops (reason, stopped_by)
+                        VALUES (?, ?)
+                    """,
+                        (reason, "manual"),
+                    )
+
+            with self._stats_lock:
+                self._stats["emergency_stops"] += 1
+
+            log_event(
+                logger, "emergency_stop_activated", level="critical", reason=reason
+            )
+
             return True
             
         except Exception as e:
@@ -1106,10 +1224,10 @@ class BlacklistManager:
     
     def emergency_restore(self, reason: str = "Manual emergency restore") -> bool:
         """Restore normal enforcement operations.
-        
+
         Args:
             reason: Reason for restoration
-            
+
         Returns:
             True if emergency restored successfully
         """
@@ -1117,25 +1235,23 @@ class BlacklistManager:
             # Remove emergency stop file
             if Path(self.config.emergency_stop_file).exists():
                 Path(self.config.emergency_stop_file).unlink()
-            
+
             # Log restoration
-            conn = self._get_connection()
-            with conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE emergency_stops 
-                    SET restored_at = CURRENT_TIMESTAMP, restored_by = ?
-                    WHERE restored_at IS NULL
-                    ORDER BY stopped_at DESC LIMIT 1
-                """, (reason,))
-            
-            log_event(
-                logger,
-                "emergency_restored",
-                level="info",
-                reason=reason
-            )
-            
+            with self.pool.connection() as conn:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        UPDATE emergency_stops
+                        SET restored_at = CURRENT_TIMESTAMP, restored_by = ?
+                        WHERE restored_at IS NULL
+                        ORDER BY stopped_at DESC LIMIT 1
+                    """,
+                        (reason,),
+                    )
+
+            log_event(logger, "emergency_restored", level="info", reason=reason)
+
             return True
             
         except Exception as e:

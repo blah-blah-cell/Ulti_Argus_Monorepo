@@ -445,6 +445,7 @@ class AegisConfig:
     
     # Security
     anonymization_salt: str
+    ipc_secret: str
 
     # Optional integrations
     firebase: FirebaseConfig | None = None
@@ -497,6 +498,7 @@ class AegisConfig:
                 "stats_file": self.stats_file,
                 "health_check_port": self.health_check_port,
                 "anonymization_salt": "***",  # Redacted
+                "ipc_secret": "***",  # Redacted
             },
             "firebase": {
                 "enabled": self.firebase is not None,
@@ -599,6 +601,12 @@ def load_aegis_config(
         os.environ.get("AEGIS_SALT")
     )
 
+    ipc_secret = get_optional(
+        runtime_data,
+        "ipc_secret",
+        os.environ.get("ARGUS_IPC_SECRET")
+    )
+
     if not anonymization_salt:
         raise ValidationError([
             ValidationIssue(
@@ -607,6 +615,14 @@ def load_aegis_config(
             )
         ])
     
+    if not ipc_secret:
+        raise ValidationError([
+            ValidationIssue(
+                "$.runtime.ipc_secret",
+                "IPC secret is required in config or ARGUS_IPC_SECRET env var"
+            )
+        ])
+
     # Load optional Firebase configuration
     firebase: FirebaseConfig | None = None
     if get_optional(raw_map, "firebase", None):
@@ -633,6 +649,7 @@ def load_aegis_config(
         prediction=prediction,
         enforcement=enforcement,
         anonymization_salt=anonymization_salt,
+        ipc_secret=ipc_secret,
         firebase=firebase,
         github=github,
         log_level=log_level,

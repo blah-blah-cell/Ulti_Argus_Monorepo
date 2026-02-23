@@ -109,7 +109,8 @@ class PredictionEngine:
         self._ipc_thread = None
         self._csv_queue = Queue()
         self._processed_files = set()
-        
+        self._processed_files_lock = threading.Lock()
+
         # Statistics
         self._stats = {
             'total_flows_processed': 0,
@@ -124,6 +125,7 @@ class PredictionEngine:
             'last_prediction_time': None,
             'average_processing_time': 0.0
         }
+        self._stats_lock = threading.Lock()
         
         # Performance tracking
         self._processing_times = []
@@ -294,22 +296,24 @@ class PredictionEngine:
                         "new_csv_files_found",
                         level="debug",
                         file_count=len(new_files),
-                        files=[str(f) for f in new_files]
+                        files=[str(f) for f in new_files],
                     )
-                    
+
                     # Add files to processing queue
-                    for csv_file in new_files:
-                        if csv_file not in self._processed_files:
-                            self._csv_queue.put(csv_file)
-                    
+                    with self._processed_files_lock:
+                        for csv_file in new_files:
+                            if csv_file not in self._processed_files:
+                                self._csv_queue.put(csv_file)
+
                     consecutive_errors = 0
                 else:
                     time.sleep(1)  # Brief pause before next check
-                
+
             except Exception as e:
                 consecutive_errors += 1
-                self._stats['poll_errors'] += 1
-                
+                with self._stats_lock:
+                    self._stats["poll_errors"] += 1
+
                 log_event(
                     logger,
                     "csv_polling_error",
@@ -358,13 +362,13 @@ class PredictionEngine:
             
             # Find CSV files
             csv_files = list(csv_dir.glob("*.csv"))
-            
+
             # Filter out processed files
-            new_files = [
-                f for f in csv_files 
-                if f.name not in self._processed_files
-            ]
-            
+            with self._processed_files_lock:
+                new_files = [
+                    f for f in csv_files if f.name not in self._processed_files
+                ]
+
             # Sort by modification time (newest first)
             new_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
             
@@ -396,18 +400,21 @@ class PredictionEngine:
                 # _process_csv_file returns True if processed OR if permanent error occurred
                 # It returns False if transient error occurred (needs retry)
                 success = self._process_csv_file(csv_file)
-                
+
                 if success:
-                    self._processed_files.add(csv_file.name)
-                    self._stats['csv_files_processed'] += 1
+                    with self._processed_files_lock:
+                        self._processed_files.add(csv_file.name)
+                    with self._stats_lock:
+                        self._stats["csv_files_processed"] += 1
                 else:
                     # Put file back in queue for retry
                     self._csv_queue.put(csv_file)
-                
+
                 self._csv_queue.task_done()
-                
+
             except Exception as e:
-                self._stats['prediction_errors'] += 1
+                with self._stats_lock:
+                    self._stats["prediction_errors"] += 1
                 log_event(
                     logger,
                     "prediction_processing_error",
@@ -472,13 +479,16 @@ class PredictionEngine:
                 
                 # We need to inject the payload bytes back into the router loop if it requests it.
                 try:
-                    predictions_df['__raw_payload__'] = [frame.payload]
+                    predictions_df["__raw_payload__"] = [frame.payload]
                     self._process_batch_predictions(predictions_df)
 
-                    self._stats['total_flows_processed'] += 1
-                    self._stats['total_predictions_made'] += 1
+                    with self._stats_lock:
+                        self._stats["total_flows_processed"] += 1
+                        self._stats["total_predictions_made"] += 1
                 except Exception as e:
-                    log_event(logger, "ipc_batch_processing_error", level="error", error=str(e))
+                    log_event(
+                        logger, "ipc_batch_processing_error", level="error", error=str(e)
+                    )
 
             except Exception as e:
                 log_event(
@@ -560,11 +570,12 @@ class PredictionEngine:
                     
                     # Process predictions and make enforcement decisions
                     self._process_batch_predictions(predictions_df)
-                    
+
                     # Update statistics
-                    self._stats['total_flows_processed'] += len(batch_df)
-                    self._stats['total_predictions_made'] += len(predictions_df)
-                    
+                    with self._stats_lock:
+                        self._stats["total_flows_processed"] += len(batch_df)
+                        self._stats["total_predictions_made"] += len(predictions_df)
+
                 except ModelLoadError as e:
                     log_event(
                         logger,
@@ -598,18 +609,22 @@ class PredictionEngine:
             
             # Update processing time statistics
             processing_time = time.time() - start_time
-            self._processing_times.append(processing_time)
-            if len(self._processing_times) > self._max_processing_history:
-                self._processing_times.pop(0)
             
-            # Update last processed file
-            self._stats['last_processed_file'] = str(csv_file)
-            self._stats['last_prediction_time'] = datetime.now().isoformat()
-            
-            # Calculate average processing time
-            if self._processing_times:
-                self._stats['average_processing_time'] = sum(self._processing_times) / len(self._processing_times)
-            
+            with self._stats_lock:
+                self._processing_times.append(processing_time)
+                if len(self._processing_times) > self._max_processing_history:
+                    self._processing_times.pop(0)
+
+                # Update last processed file
+                self._stats["last_processed_file"] = str(csv_file)
+                self._stats["last_prediction_time"] = datetime.now().isoformat()
+
+                # Calculate average processing time
+                if self._processing_times:
+                    self._stats["average_processing_time"] = sum(
+                        self._processing_times
+                    ) / len(self._processing_times)
+
             log_event(
                 logger,
                 "csv_file_processed_successfully",
@@ -1000,9 +1015,16 @@ class PredictionEngine:
                                 )
 
                                 if success:
-                                    self._stats['blacklist_additions'] += 1
+                                    with self._stats_lock:
+                                        self._stats["blacklist_additions"] += 1
                             except Exception as bl_err:
-                                log_event(logger, "blacklist_addition_failed", level="error", error=str(bl_err), ip=src_ip)
+                                log_event(
+                                    logger,
+                                    "blacklist_addition_failed",
+                                    level="error",
+                                    error=str(bl_err),
+                                    ip=src_ip,
+                                )
 
                         # Log enforcement decision
                         log_event(
@@ -1013,12 +1035,13 @@ class PredictionEngine:
                             dst_ip=dst_ip,
                             reason=action_reason,
                             risk_level=risk_level,
-                            prediction_score=float(anomaly_score)
+                            prediction_score=float(anomaly_score),
                         )
-                    
+
                     # Update anomaly statistics
                     if prediction == -1:
-                        self._stats['anomalies_detected'] += 1
+                        with self._stats_lock:
+                            self._stats["anomalies_detected"] += 1
 
                         log_event(
                             logger,
@@ -1058,33 +1081,38 @@ class PredictionEngine:
     
     def _reset_stats(self) -> None:
         """Reset internal statistics."""
-        self._stats.update({
-            'total_flows_processed': 0,
-            'total_predictions_made': 0,
-            'anomalies_detected': 0,
-            'blacklist_additions': 0,
-            'enforcement_actions': 0,
-            'csv_files_processed': 0,
-            'poll_errors': 0,
-            'prediction_errors': 0,
-            'last_processed_file': None,
-            'last_prediction_time': None,
-            'average_processing_time': 0.0
-        })
-        self._processing_times.clear()
-    
+        with self._stats_lock:
+            self._stats.update(
+                {
+                    "total_flows_processed": 0,
+                    "total_predictions_made": 0,
+                    "anomalies_detected": 0,
+                    "blacklist_additions": 0,
+                    "enforcement_actions": 0,
+                    "csv_files_processed": 0,
+                    "poll_errors": 0,
+                    "prediction_errors": 0,
+                    "last_processed_file": None,
+                    "last_prediction_time": None,
+                    "average_processing_time": 0.0,
+                }
+            )
+            self._processing_times.clear()
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get current prediction engine statistics.
-        
+
         Returns:
             Dictionary containing statistics
         """
-        stats = self._stats.copy()
-        
+        with self._stats_lock:
+            stats = self._stats.copy()
+
         # Add queue statistics
-        stats['csv_queue_size'] = self._csv_queue.qsize()
-        stats['processed_files_count'] = len(self._processed_files)
-        stats['is_running'] = self._running
+        stats["csv_queue_size"] = self._csv_queue.qsize()
+        with self._processed_files_lock:
+            stats["processed_files_count"] = len(self._processed_files)
+        stats["is_running"] = self._running
         
         # Add model information
         try:
@@ -1130,11 +1158,13 @@ class PredictionEngine:
             
             # Process the file directly
             success = self._process_csv_file(csv_file, force=True)
-            
+
             if success:
-                self._processed_files.add(csv_file.name)
-                self._stats['csv_files_processed'] += 1
-            
+                with self._processed_files_lock:
+                    self._processed_files.add(csv_file.name)
+                with self._stats_lock:
+                    self._stats["csv_files_processed"] += 1
+
             return success
             
         except Exception as e:

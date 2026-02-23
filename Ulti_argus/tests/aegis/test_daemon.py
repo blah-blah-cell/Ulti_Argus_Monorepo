@@ -86,6 +86,7 @@ def mock_config():
         prediction=prediction_config,
         enforcement=enforcement_config,
         anonymization_salt="test_salt",
+        ipc_secret="test_secret",
         state_file="/tmp/argus/state.json",
         stats_file="/tmp/argus/stats.json",
         pid_file="/tmp/argus/aegis.pid"
@@ -95,7 +96,8 @@ def mock_config():
 @pytest.fixture
 def daemon(mock_dependencies, mock_config):
     mock_dependencies["load_config"].return_value = mock_config
-    return AegisDaemon("config.yaml")
+    with patch("os.path.exists", return_value=True):
+        return AegisDaemon("config.yaml")
 
 class TestAegisDaemonInitialization:
     def test_initialization_success(self, daemon, mock_dependencies, mock_config):
@@ -107,7 +109,10 @@ class TestAegisDaemonInitialization:
             'anonymizer': None,
             'model_manager': None,
             'blacklist_manager': None,
-            'prediction_engine': None
+            'prediction_engine': None,
+            'feedback_manager': None,
+            'kronos_router': None,
+            'ipc_listener': None
         }
 
         mock_dependencies["configure_logging"].assert_called_once()
@@ -121,7 +126,8 @@ class TestAegisDaemonInitialization:
     def test_initialization_config_validation_failure(self, mock_dependencies, mock_config):
         """Test initialization with configuration issues."""
         with patch("pathlib.Path.exists", return_value=False), \
-             patch("pathlib.Path.mkdir", side_effect=OSError("Permission denied")):
+             patch("pathlib.Path.mkdir", side_effect=OSError("Permission denied")), \
+             patch("os.path.exists", return_value=True):
 
             mock_dependencies["load_config"].return_value = mock_config
 
@@ -150,7 +156,8 @@ class TestAegisDaemonInitialization:
         # We need to do this on the class before instantiation or on the instance.
         # Since we are testing __init__, we have to patch on the class or use a context manager before creating the instance.
 
-        with patch.object(AegisDaemon, "_validate_configuration", side_effect=Exception("Critical Init Error")):
+        with patch.object(AegisDaemon, "_validate_configuration", side_effect=Exception("Critical Init Error")), \
+             patch("os.path.exists", return_value=True):
              with pytest.raises(ServiceStartError) as excinfo:
                 AegisDaemon("config.yaml")
              assert "Component initialization failed" in str(excinfo.value)
@@ -205,7 +212,7 @@ class TestAegisDaemonStartStop:
         assert daemon._running is False
 
         mock_dependencies["log_event"].assert_any_call(
-            ANY, "aegis_daemon_start_failed", level="error", error="Failed to start prediction engine"
+            ANY, "aegis_daemon_start_failed", level="error", error="Exception starting prediction engine: Failed to start prediction engine"
         )
 
     def test_start_exception(self, daemon, mock_dependencies):
@@ -217,7 +224,7 @@ class TestAegisDaemonStartStop:
         assert daemon._running is False
 
         mock_dependencies["log_event"].assert_any_call(
-            ANY, "aegis_daemon_start_failed", level="error", error="Model Init Error"
+            ANY, "aegis_daemon_start_failed", level="error", error="Failed to initialize ModelManager: Model Init Error"
         )
 
     @patch("argus_v.aegis.daemon.KronosRouter")
@@ -278,9 +285,9 @@ class TestAegisDaemonStartStop:
         daemon._components['prediction_engine'] = Mock()
         daemon._components['prediction_engine'].stop.side_effect = Exception("Stop Error")
 
-        assert daemon.stop() is False
+        assert daemon.stop() is True
         mock_dependencies["log_event"].assert_any_call(
-            ANY, "aegis_daemon_stop_failed", level="error", error="Stop Error"
+            ANY, "prediction_engine_stop_exception", level="error", error="Stop Error"
         )
 
 class TestAegisDaemonMonitoring:
@@ -347,12 +354,11 @@ class TestAegisDaemonMonitoring:
         daemon._perform_health_check()
 
         assert daemon._stats['health_checks_failed'] == 1
-        # Since get_health_status catches exceptions and returns error status,
-        # _perform_health_check logs 'health_check_completed' with overall_health='error'
-        # instead of 'health_check_failed'.
+        # The exception is caught within get_health_status component check, making it 'unhealthy'
+        # but counting as a checked component.
         mock_dependencies["log_event"].assert_any_call(
             ANY, "health_check_completed", level="debug",
-            overall_health='error', components_healthy=0, total_components=0
+            overall_health='unhealthy', components_healthy=0, total_components=1
         )
 
     def test_should_sync_firebase(self, daemon):

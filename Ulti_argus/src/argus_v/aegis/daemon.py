@@ -119,6 +119,7 @@ class AegisDaemon:
             'emergency_stops': 0,
             'configuration_issues': []
         }
+        self._stats_lock = threading.Lock()
         
         # Initialize components structure
         self._initialize_components()
@@ -154,7 +155,8 @@ class AegisDaemon:
             # Validate configuration
             config_issues = self._validate_configuration()
             if config_issues:
-                self._stats['configuration_issues'] = config_issues
+                with self._stats_lock:
+                    self._stats['configuration_issues'] = config_issues
                 log_event(
                     logger,
                     "configuration_issues_detected",
@@ -308,7 +310,7 @@ class AegisDaemon:
                 if _KRONOS_AVAILABLE:
                     try:
                         kronos_router = KronosRouter()
-                        ipc_listener = IPCListener()
+                        ipc_listener = IPCListener(secret_key=self.config.ipc_secret)
                         ipc_listener.start()
                         self._components['kronos_router'] = kronos_router
                         self._components['ipc_listener'] = ipc_listener
@@ -360,14 +362,17 @@ class AegisDaemon:
                     raise ServiceStartError(f"Exception starting prediction engine: {e}")
 
                 # Calculate dry run end time
-                self._stats['dry_run_end_time'] = (
+                dry_run_end = (
                     datetime.now() + timedelta(days=self.config.enforcement.dry_run_duration_days)
                 ).isoformat()
 
                 # Set running state
                 self._running = True
                 self._start_time = datetime.now()
-                self._stats['service_start_time'] = self._start_time.isoformat()
+
+                with self._stats_lock:
+                    self._stats['dry_run_end_time'] = dry_run_end
+                    self._stats['service_start_time'] = self._start_time.isoformat()
 
                 # Start background monitoring thread
                 monitor_thread = threading.Thread(
@@ -468,9 +473,14 @@ class AegisDaemon:
             try:
                 if self._start_time:
                     runtime = datetime.now() - self._start_time
-                    self._stats['total_runtime_seconds'] = runtime.total_seconds()
+                    with self._stats_lock:
+                        self._stats['total_runtime_seconds'] = runtime.total_seconds()
             except Exception as e:
                 log_event(logger, "stats_update_failed_during_stop", level="warning", error=str(e))
+
+            runtime_seconds = 0
+            with self._stats_lock:
+                runtime_seconds = self._stats.get('total_runtime_seconds', 0)
 
             if shutdown_errors:
                  log_event(
@@ -478,14 +488,14 @@ class AegisDaemon:
                     "aegis_daemon_stopped_with_errors",
                     level="warning",
                     errors=shutdown_errors,
-                    total_runtime_seconds=self._stats.get('total_runtime_seconds', 0)
+                    total_runtime_seconds=runtime_seconds
                 )
             else:
                 log_event(
                     logger,
                     "aegis_daemon_stopped",
                     level="info",
-                    total_runtime_seconds=self._stats.get('total_runtime_seconds', 0)
+                    total_runtime_seconds=runtime_seconds
                 )
             
             return True
@@ -590,12 +600,13 @@ class AegisDaemon:
         try:
             health_status = self.get_health_status()
             
-            if health_status['overall_health'] == 'healthy':
-                self._stats['health_checks_passed'] += 1
-            else:
-                self._stats['health_checks_failed'] += 1
-            
-            self._stats['last_health_check'] = datetime.now().isoformat()
+            with self._stats_lock:
+                if health_status['overall_health'] == 'healthy':
+                    self._stats['health_checks_passed'] += 1
+                else:
+                    self._stats['health_checks_failed'] += 1
+
+                self._stats['last_health_check'] = datetime.now().isoformat()
             
             log_event(
                 logger,
@@ -607,7 +618,8 @@ class AegisDaemon:
             )
             
         except Exception as e:
-            self._stats['health_checks_failed'] += 1
+            with self._stats_lock:
+                self._stats['health_checks_failed'] += 1
             log_event(
                 logger,
                 "health_check_failed",
@@ -659,8 +671,11 @@ class AegisDaemon:
                 log_event(logger, "stats_collection_failed", level="error", error=str(e))
             
             # Combine all statistics
+            with self._stats_lock:
+                daemon_stats_copy = self._stats.copy()
+
             all_stats = {
-                'daemon_stats': self._stats,
+                'daemon_stats': daemon_stats_copy,
                 'component_stats': component_stats,
                 'config_summary': self.config.to_safe_dict(),
                 'timestamp': datetime.now().isoformat()
@@ -849,7 +864,8 @@ class AegisDaemon:
             if blacklist_manager:
                 blacklist_manager.emergency_stop(reason)
             
-            self._stats['emergency_stops'] += 1
+            with self._stats_lock:
+                self._stats['emergency_stops'] += 1
             
             log_event(
                 logger,
