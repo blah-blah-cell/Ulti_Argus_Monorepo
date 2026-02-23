@@ -694,6 +694,66 @@ class ModelManager:
             )
             return False
     
+    def hot_load_model(self, model_path: str, scaler_path: str) -> bool:
+        """Hot swap the model and scaler from the provided paths.
+
+        Args:
+            model_path: Path to the new model file.
+            scaler_path: Path to the new scaler file.
+
+        Returns:
+            True if model loaded successfully, False otherwise.
+        """
+        try:
+            log_event(
+                logger,
+                "hot_load_model_attempted",
+                level="info",
+                model_path=model_path,
+                scaler_path=scaler_path
+            )
+
+            local_paths = {
+                'model': model_path,
+                'scaler': scaler_path
+            }
+
+            # Attempt to load and validate
+            if self._load_and_validate_model(local_paths):
+                # Update metadata if possible, or mark as manually loaded
+                self._model_metadata = {
+                    'name': Path(model_path).name,
+                    'timestamp': datetime.now().strftime("%Y%m%d_%H%M%S"),
+                    'type': 'hot_swap'
+                }
+                self._last_load_time = datetime.now()
+                self._load_failures = 0
+
+                log_event(
+                    logger,
+                    "hot_load_model_success",
+                    level="info",
+                    model_path=model_path
+                )
+                return True
+            else:
+                log_event(
+                    logger,
+                    "hot_load_model_validation_failed",
+                    level="error",
+                    model_path=model_path
+                )
+                return False
+
+        except Exception as e:
+            log_event(
+                logger,
+                "hot_load_model_failed",
+                level="error",
+                error=str(e)
+            )
+            return False
+
     def is_model_available(self) -> bool:
         """Check if a valid model is currently loaded.
         
