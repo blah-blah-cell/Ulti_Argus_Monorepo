@@ -19,7 +19,6 @@
 //!   JSON transport cleanly.
 
 use anyhow::Result;
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use common::FlowMetadata;
 use log::{debug, warn};
 use serde::Serialize;
@@ -32,7 +31,7 @@ use std::time::Duration;
 /// Default socket path — must match `IPCListener` in Kronos Python.
 pub const DEFAULT_SOCKET_PATH: &str = "/var/run/argus_v/dps_kronos.sock";
 
-/// JSON frame sent to Kronos for each flow.
+/// MessagePack frame sent to Kronos for each flow.
 #[derive(Serialize)]
 struct FlowFrame<'a> {
     src_ip: String,
@@ -43,8 +42,9 @@ struct FlowFrame<'a> {
     bytes_in: u32,
     bytes_out: u32,
     duration: f32,
-    /// Base64-encoded payload bytes, or `null` if empty.
-    payload: Option<String>,
+    /// Raw payload bytes
+    #[serde(with = "serde_bytes")]
+    payload: Option<&'a [u8]>,
 }
 
 /// Maps the raw `protocol` u32 from eBPF to a human-readable string.
@@ -86,9 +86,9 @@ impl KronosSender {
     ///
     /// Silently drops the frame if Kronos is unreachable — DPS keeps running.
     pub fn send(&mut self, flow: &FlowMetadata) {
-        let payload_opt = if flow.payload_len > 0 {
+        let payload_slice = if flow.payload_len > 0 {
             let len = (flow.payload_len as usize).min(flow.payload.len());
-            Some(B64.encode(&flow.payload[..len]))
+            Some(&flow.payload[..len])
         } else {
             None
         };
@@ -102,22 +102,19 @@ impl KronosSender {
             bytes_in: flow.payload_len,
             bytes_out: 0,  // DPS doesn't track egress bytes (yet)
             duration: 0.0, // DPS sees individual packets, not flows
-            payload: payload_opt,
+            payload: payload_slice,
         };
 
-        let mut json = match serde_json::to_string(&frame) {
-            Ok(j) => j,
-            Err(e) => {
-                warn!("[kronos] JSON serialise failed: {}", e);
-                return;
-            }
-        };
-        json.push('\n');
+        let mut buf = Vec::new();
+        if let Err(e) = rmp_serde::encode::write_named(&mut buf, &frame) {
+            warn!("[kronos] MessagePack serialise failed: {}", e);
+            return;
+        }
 
-        if self.write_frame(json.as_bytes()).is_err() {
+        if self.write_frame(&buf).is_err() {
             // Retry once after reconnect
             self.stream = None;
-            if self.write_frame(json.as_bytes()).is_err() {
+            if self.write_frame(&buf).is_err() {
                 debug!("[kronos] Kronos not reachable — frame dropped");
             }
         }
@@ -163,8 +160,23 @@ pub fn new_shared_sender(socket_path: &str) -> SharedKronosSender {
 mod tests {
     use super::*;
     use common::FlowMetadata;
+    use serde::Deserialize;
 
-    /// Build a synthetic flow and verify the JSON frame fields are correct.
+    #[derive(Deserialize)]
+    struct FlowFrameOwned {
+        src_ip: String,
+        dst_ip: String,
+        src_port: u16,
+        dst_port: u16,
+        protocol: String,
+        bytes_in: u32,
+        bytes_out: u32,
+        duration: f32,
+        #[serde(with = "serde_bytes")]
+        payload: Option<Vec<u8>>,
+    }
+
+    /// Build a synthetic flow and verify the MessagePack frame fields are correct.
     #[test]
     fn test_flow_frame_serialization() {
         // Build a flow: TCP, 1.2.3.4 -> 5.6.7.8, port 80
@@ -181,9 +193,8 @@ mod tests {
         flow.payload[1] = b'E';
         flow.payload[2] = b'T';
 
-        // Replicate the serialization logic from KronosSender::send
         let len = (flow.payload_len as usize).min(flow.payload.len());
-        let payload_b64 = B64.encode(&flow.payload[..len]);
+        let payload_slice = Some(&flow.payload[..len]);
 
         let frame = FlowFrame {
             src_ip: ip_to_string(flow.src_ip),
@@ -194,25 +205,25 @@ mod tests {
             bytes_in: flow.payload_len,
             bytes_out: 0,
             duration: 0.0,
-            payload: Some(payload_b64),
+            payload: payload_slice,
         };
 
-        let json = serde_json::to_string(&frame).expect("serialization failed");
+        let mut buf = Vec::new();
+        rmp_serde::encode::write_named(&mut buf, &frame).expect("serialization failed");
 
-        // Field presence checks
-        assert!(json.contains("\"src_ip\":\"1.2.3.4\""), "src_ip mismatch: {}", json);
-        assert!(json.contains("\"dst_ip\":\"5.6.7.8\""), "dst_ip mismatch: {}", json);
-        assert!(json.contains("\"protocol\":\"TCP\""),  "protocol mismatch: {}", json);
-        assert!(json.contains("\"dst_port\":80"),       "dst_port mismatch: {}", json);
-        // Payload should be base64 of b"GET" = "R0VU"
-        assert!(json.contains("\"R0VU\""), "base64 payload mismatch: {}", json);
+        // Deserialize and check
+        let deser: FlowFrameOwned = rmp_serde::from_slice(&buf).expect("deserialization failed");
 
-        println!("[kronos test] Serialized frame: {}", json);
+        assert_eq!(deser.src_ip, "1.2.3.4");
+        assert_eq!(deser.dst_ip, "5.6.7.8");
+        assert_eq!(deser.protocol, "TCP");
+        assert_eq!(deser.dst_port, 80);
+        assert_eq!(deser.payload, Some(vec![b'G', b'E', b'T']));
     }
 
-    /// Verify that a zero-length payload produces `"payload":null`.
+    /// Verify that a zero-length payload produces correct output (null payload).
     #[test]
-    fn test_flow_frame_empty_payload_is_null() {
+    fn test_flow_frame_empty_payload() {
         let flow = FlowMetadata {
             src_ip: 0,
             dst_ip: 0,
@@ -235,41 +246,41 @@ mod tests {
             payload: None, // empty payload → null
         };
 
-        let json = serde_json::to_string(&frame).expect("serialization failed");
-        assert!(json.contains("\"payload\":null"), "empty payload should serialize as null: {}", json);
+        let mut buf = Vec::new();
+        rmp_serde::encode::write_named(&mut buf, &frame).expect("serialization failed");
+
+        let deser: FlowFrameOwned = rmp_serde::from_slice(&buf).expect("deserialization failed");
+        assert_eq!(deser.payload, None);
     }
 
     /// End-to-end socket test (Linux only — requires Unix domain sockets).
-    ///
-    /// Spawns a `UnixListener` in a background thread, sends one flow frame
-    /// via `KronosSender`, then asserts the listener received a valid
-    /// newline-terminated JSON frame containing the expected `src_ip`.
     #[test]
     #[cfg(target_os = "linux")]
     fn test_send_over_unix_socket() {
-        use std::io::{BufRead, BufReader};
+        use std::io::{BufReader, Read};
         use std::os::unix::net::UnixListener;
         use std::sync::mpsc;
 
         let socket_path = "/tmp/dps_kronos_test.sock";
 
-        // Clean up any leftover socket from a previous test run
+        // Clean up any leftover socket
         let _ = std::fs::remove_file(socket_path);
 
         let listener = UnixListener::bind(socket_path).expect("bind failed");
 
-        let (tx, rx) = mpsc::channel::<String>();
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
 
-        // Background thread: accept one connection, read one line
+        // Background thread: accept one connection, read everything
         std::thread::spawn(move || {
-            let (stream, _) = listener.accept().expect("accept failed");
-            let mut reader = BufReader::new(stream);
-            let mut line = String::new();
-            reader.read_line(&mut line).expect("read_line failed");
-            tx.send(line).expect("send failed");
+            let (mut stream, _) = listener.accept().expect("accept failed");
+            // MessagePack is not newline-terminated, so we read available bytes or until EOF.
+            // For this test, we expect one frame.
+            let mut buf = vec![0u8; 1024];
+            let n = stream.read(&mut buf).expect("read failed");
+            tx.send(buf[..n].to_vec()).expect("send failed");
         });
 
-        // Give the listener thread a moment to be ready
+        // Give the listener thread a moment
         std::thread::sleep(Duration::from_millis(50));
 
         // Send a flow frame
@@ -289,16 +300,15 @@ mod tests {
         let received = rx.recv_timeout(Duration::from_secs(2))
             .expect("timed out waiting for data");
 
-        println!("[kronos test] Received over socket: {}", received.trim());
+        println!("[kronos test] Received bytes: {:?}", received);
 
-        assert!(received.ends_with('\n'), "frame must be newline-terminated");
-        let parsed: serde_json::Value = serde_json::from_str(received.trim())
-            .expect("received data is not valid JSON");
+        let deser: FlowFrameOwned = rmp_serde::from_slice(&received)
+            .expect("received data is not valid MessagePack");
 
-        assert_eq!(parsed["src_ip"], "192.168.1.1", "src_ip round-trip failed");
-        assert_eq!(parsed["dst_port"], 22,           "dst_port round-trip failed");
-        assert_eq!(parsed["protocol"], "TCP",         "protocol round-trip failed");
-        assert_eq!(parsed["payload"], serde_json::Value::Null, "empty payload should be null");
+        assert_eq!(deser.src_ip, "192.168.1.1", "src_ip round-trip failed");
+        assert_eq!(deser.dst_port, 22,           "dst_port round-trip failed");
+        assert_eq!(deser.protocol, "TCP",         "protocol round-trip failed");
+        assert_eq!(deser.payload, None, "empty payload should be null");
 
         // Cleanup
         let _ = std::fs::remove_file(socket_path);

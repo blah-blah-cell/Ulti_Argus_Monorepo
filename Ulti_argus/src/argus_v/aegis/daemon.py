@@ -14,11 +14,16 @@ import signal
 import sys
 import threading
 import time
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
+import uvicorn
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from pydantic import BaseModel
 
 from ..oracle_core.config import ValidationError
 from ..oracle_core.logging import configure_logging, log_event
@@ -36,6 +41,144 @@ except ImportError:
     _KRONOS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+# Prometheus Metrics
+AEGIS_FLOWS_ANALYZED = Counter('aegis_flows_analyzed_total', 'Total number of flows analyzed')
+AEGIS_ANOMALIES_DETECTED = Counter('aegis_anomalies_detected_total', 'Total number of anomalies detected')
+AEGIS_ACTIVE_BLOCKS = Gauge('aegis_active_blocks_gauge', 'Number of currently active IP blocks')
+AEGIS_INFERENCE_LATENCY = Histogram('aegis_inference_latency_seconds', 'Inference latency in seconds')
+AEGIS_MODEL_ACCURACY = Gauge('aegis_model_accuracy', 'Current model accuracy score')
+
+
+# API Models
+class BlockRequest(BaseModel):
+    reason: str = "Manual blacklist"
+    risk_level: str = "medium"
+    ttl_hours: Optional[int] = None
+
+
+app = FastAPI(title="Aegis Daemon API")
+
+
+@app.post("/api/whitelist/{ip}")
+async def whitelist_ip(ip: str):
+    """Manually whitelist an IP address."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('blacklist_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or BlacklistManager not available")
+
+    success = daemon._components['blacklist_manager'].remove_from_blacklist(ip, source="manual")
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to whitelist IP")
+    return {"message": f"IP {ip} whitelisted"}
+
+
+@app.post("/api/blacklist/{ip}")
+async def blacklist_ip(ip: str, request: BlockRequest):
+    """Manually blacklist an IP address."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('blacklist_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or BlacklistManager not available")
+
+    success = daemon._components['blacklist_manager'].add_to_blacklist(
+        ip_address=ip,
+        reason=request.reason,
+        risk_level=request.risk_level,
+        ttl_hours=request.ttl_hours,
+        source="manual",
+        enforce=True
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to blacklist IP")
+    return {"message": f"IP {ip} blacklisted"}
+
+
+@app.post("/api/retrain")
+async def trigger_retrain():
+    """Trigger emergency model retraining."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('feedback_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or FeedbackManager not available")
+
+    success = daemon._components['feedback_manager'].trigger_retrain()
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to trigger retraining")
+    return {"message": "Retraining triggered"}
+
+
+@app.get("/api/status")
+async def get_status():
+    """Get daemon health status."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon:
+        raise HTTPException(status_code=503, detail="Daemon not available")
+    return daemon.get_health_status()
+
+
+@app.get("/api/metrics")
+async def get_metrics():
+    """Get live telemetry data."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon:
+        raise HTTPException(status_code=503, detail="Daemon not available")
+
+    # Combine daemon stats and component stats
+    stats = daemon._stats.copy()
+
+    # Add prediction stats if available
+    prediction_engine = daemon._components.get('prediction_engine')
+    if prediction_engine:
+        stats['prediction_engine'] = prediction_engine.get_statistics()
+
+    return stats
+
+
+@app.get("/api/blacklist")
+async def get_blacklist(active_only: bool = True, limit: int = 15):
+    """Get list of blacklisted IPs."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('blacklist_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or BlacklistManager not available")
+
+    entries = daemon._components['blacklist_manager'].get_blacklist_entries(
+        active_only=active_only,
+        limit=limit
+    )
+    return list(entries)
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for live updates."""
+    await websocket.accept()
+    daemon = getattr(app.state, "daemon", None)
+    try:
+        while True:
+            if daemon:
+                # Gather data
+                prediction_engine = daemon._components.get('prediction_engine')
+                pe_stats = prediction_engine.get_statistics() if prediction_engine else {}
+
+                # Try to get active blocks count
+                blacklist_manager = daemon._components.get('blacklist_manager')
+                active_blocks = blacklist_manager._stats.get('active_entries', 0) if blacklist_manager else 0
+
+                data = {
+                    "health": daemon.get_health_status(),
+                    "stats": daemon._stats,
+                    "prediction_stats": pe_stats,
+                    "active_blocks": active_blocks,
+                    "timestamp": datetime.now().isoformat()
+                }
+                await websocket.send_json(data)
+            else:
+                await websocket.send_json({"error": "Daemon not ready"})
+
+            await asyncio.sleep(1)  # Update every second
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
 
 
 class AegisDaemonError(Exception):
@@ -96,6 +239,7 @@ class AegisDaemon:
         self._running = False
         self._shutdown_event = threading.Event()
         self._start_time = None
+        self._api_server = None  # Uvicorn server instance
         self._components = {
             'anonymizer': None,
             'model_manager': None,
@@ -321,6 +465,11 @@ class AegisDaemon:
 
                 # Initialize prediction engine
                 try:
+                    metrics = {
+                        'flows_analyzed': AEGIS_FLOWS_ANALYZED,
+                        'anomalies_detected': AEGIS_ANOMALIES_DETECTED,
+                        'inference_latency': AEGIS_INFERENCE_LATENCY
+                    }
                     prediction_engine = PredictionEngine(
                         polling_config=self.config.polling,
                         prediction_config=self.config.prediction,
@@ -329,7 +478,8 @@ class AegisDaemon:
                         anonymizer=anonymizer,
                         feedback_manager=feedback_manager,
                         kronos_router=kronos_router,
-                        ipc_listener=ipc_listener
+                        ipc_listener=ipc_listener,
+                        metrics=metrics
                     )
                     self._components['prediction_engine'] = prediction_engine
                 except Exception as e:
@@ -369,6 +519,22 @@ class AegisDaemon:
                 self._start_time = datetime.now()
                 self._stats['service_start_time'] = self._start_time.isoformat()
 
+                # Start API Server
+                try:
+                    app.state.daemon = self
+                    config = uvicorn.Config(app, host="127.0.0.1", port=8081, log_level="info", loop="asyncio")
+                    self._api_server = uvicorn.Server(config)
+
+                    api_thread = threading.Thread(
+                        target=self._api_server.run,
+                        name="Aegis-API",
+                        daemon=True
+                    )
+                    api_thread.start()
+                    log_event(logger, "api_server_started", port=8081)
+                except Exception as e:
+                    log_event(logger, "api_server_start_failed", level="error", error=str(e))
+
                 # Start background monitoring thread
                 monitor_thread = threading.Thread(
                     target=self._monitoring_loop,
@@ -377,6 +543,32 @@ class AegisDaemon:
                 )
                 monitor_thread.start()
 
+                # Start Watchdog thread
+                watchdog_thread = threading.Thread(
+                    target=self._watchdog_loop,
+                    name="Aegis-Watchdog",
+                    daemon=True
+                )
+                watchdog_thread.start()
+
+                # Start Prometheus metrics exporter
+                try:
+                    start_http_server(9090)
+                    log_event(logger, "prometheus_exporter_started", port=9090)
+                except Exception as e:
+                    log_event(logger, "prometheus_exporter_failed", error=str(e), level="error")               # Start Online Learning Thread
+                try:
+                    feedback_dir = Path(self.config.enforcement.feedback_dir)
+                    ol_thread = OnlineLearningThread(
+                        prediction_engine=prediction_engine,
+                        db_path=feedback_dir / "online_learning.db"
+                    )
+                    ol_thread.start()
+                    self._components['online_learning_thread'] = ol_thread
+                except Exception as ol_err:
+                    log_event(logger, "online_learning_start_failed", error=str(ol_err))
+
+>>>>>>> main
                 log_event(
                     logger,
                     "aegis_daemon_started",
@@ -436,6 +628,14 @@ class AegisDaemon:
             self._shutdown_event.set()
             
             shutdown_errors = []
+
+            # Stop API server
+            try:
+                if self._api_server:
+                    self._api_server.should_exit = True
+                    log_event(logger, "api_server_stopping")
+            except Exception as e:
+                log_event(logger, "api_server_stop_failed", level="warning", error=str(e))
 
             # Stop prediction engine
             try:
@@ -503,6 +703,53 @@ class AegisDaemon:
             self._running = False
             self._shutdown_event.set()
     
+    def _watchdog_loop(self) -> None:
+        """Watchdog loop to monitor prediction engine health."""
+        log_event(logger, "watchdog_started", level="info")
+        while self._running:
+            try:
+                # Check every 30 seconds
+                for _ in range(30):
+                    if not self._running:
+                        return
+                    time.sleep(1)
+
+                prediction_engine = self._components.get('prediction_engine')
+                if not prediction_engine:
+                    continue
+
+                # Check if threads are alive while engine is supposed to be running
+                if prediction_engine._running:
+                    poll_alive = prediction_engine._poll_thread and prediction_engine._poll_thread.is_alive()
+                    pred_alive = prediction_engine._prediction_thread and prediction_engine._prediction_thread.is_alive()
+
+                    ipc_alive = True
+                    if prediction_engine.ipc_listener:
+                        ipc_alive = prediction_engine._ipc_thread and prediction_engine._ipc_thread.is_alive()
+
+                    if not (poll_alive and pred_alive and ipc_alive):
+                        log_event(
+                            logger,
+                            "watchdog_prediction_engine_unresponsive",
+                            level="error",
+                            poll_thread=poll_alive,
+                            pred_thread=pred_alive,
+                            ipc_thread=ipc_alive
+                        )
+
+                        # Restart prediction engine
+                        try:
+                            log_event(logger, "watchdog_restarting_prediction_engine", level="warning")
+                            prediction_engine.stop()
+                            time.sleep(2)
+                            prediction_engine.start()
+                            log_event(logger, "watchdog_prediction_engine_restarted", level="info")
+                        except Exception as e:
+                            log_event(logger, "watchdog_restart_failed", level="error", error=str(e))
+
+            except Exception as e:
+                log_event(logger, "watchdog_error", level="error", error=str(e))
+
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""
         def signal_handler(signum, frame):
@@ -658,6 +905,22 @@ class AegisDaemon:
             except Exception as e:
                 log_event(logger, "stats_collection_failed", level="error", error=str(e))
             
+            # Update Prometheus Gauges
+            if 'blacklist_manager' in component_stats:
+                bl_stats = component_stats['blacklist_manager']
+                if isinstance(bl_stats, dict) and 'active_entries' in bl_stats:
+                    AEGIS_ACTIVE_BLOCKS.set(bl_stats['active_entries'])
+
+            if 'model_manager' in component_stats:
+                mm_stats = component_stats['model_manager']
+                if isinstance(mm_stats, dict):
+                    metadata = mm_stats.get('model_metadata', {})
+                    if metadata and 'accuracy' in metadata:
+                        try:
+                            AEGIS_MODEL_ACCURACY.set(float(metadata['accuracy']))
+                        except (ValueError, TypeError):
+                            pass
+
             # Combine all statistics
             all_stats = {
                 'daemon_stats': self._stats,

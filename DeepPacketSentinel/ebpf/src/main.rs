@@ -4,7 +4,7 @@
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
-    maps::{HashMap, RingBuf},
+    maps::{HashMap, PerCpuArray, RingBuf, XskMap},
     programs::XdpContext,
     helpers::bpf_ktime_get_ns,
 };
@@ -34,6 +34,13 @@ static RATE_LIMIT: HashMap<IPAddress, TokenBucket> = HashMap::with_max_entries(1
 #[map]
 static TELEMETRY: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
 
+#[map]
+static XSK_MAP: XskMap = XskMap::with_max_entries(64, 0);
+
+// 0: Passed packets, 1: Dropped packets, 2: Bytes processed
+#[map]
+static PERF_STATS: PerCpuArray<u64> = PerCpuArray::with_max_entries(3, 0);
+
 #[xdp]
 pub fn xdp_firewall(ctx: XdpContext) -> u32 {
     match try_xdp_firewall(ctx) {
@@ -46,6 +53,13 @@ pub fn xdp_firewall(ctx: XdpContext) -> u32 {
 fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
     // Emits AYA_LOGS map so EbpfLogger::init succeeds in userspace
     info!(&ctx, "xdp_firewall: packet received");
+
+    let packet_len = (ctx.data_end() - ctx.data()) as u64;
+
+    // Increment bytes processed (index 2)
+    if let Some(bytes) = PERF_STATS.get_ptr_mut(2) {
+        unsafe { *bytes += packet_len };
+    }
 
     let eth_hdr: *const EthHdr = unsafe { ptr_at(&ctx, 0)? };
 
@@ -61,6 +75,9 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
     let proto = unsafe { (*ipv4_hdr).proto };
 
     if unsafe { BLOCKLIST.get(&source_addr).is_some() } {
+        if let Some(dropped) = PERF_STATS.get_ptr_mut(1) {
+            unsafe { *dropped += 1 };
+        }
         return Ok(xdp_action::XDP_DROP);
     }
 
@@ -69,10 +86,13 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
         let now = unsafe { bpf_ktime_get_ns() };
         bucket.refill(now);
 
-        let packet_len = (ctx.data_end() - ctx.data()) as u64;
+        // packet_len calculated above
         if bucket.tokens >= packet_len {
             bucket.tokens -= packet_len;
         } else {
+            if let Some(dropped) = PERF_STATS.get_ptr_mut(1) {
+                unsafe { *dropped += 1 };
+            }
             return Ok(xdp_action::XDP_DROP);
         }
     }
@@ -129,7 +149,18 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
         ring_buf.submit(0);
     }
 
-    Ok(xdp_action::XDP_PASS)
+    // Increment passed packets (index 0)
+    if let Some(passed) = PERF_STATS.get_ptr_mut(0) {
+        unsafe { *passed += 1 };
+    }
+
+    // Attempt to redirect to AF_XDP socket if bound
+    // accessing rx_queue_index from raw context as the wrapper might be missing in older aya-ebpf
+    let queue_index = unsafe { (*ctx.ctx).rx_queue_index };
+    match XSK_MAP.redirect(queue_index, 0) {
+        Ok(action) => Ok(action),
+        Err(_) => Ok(xdp_action::XDP_PASS),
+    }
 }
 
 #[inline(always)]
