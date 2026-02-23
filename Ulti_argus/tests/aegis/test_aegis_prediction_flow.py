@@ -572,10 +572,11 @@ class TestDryRunTimer:
         """Test dry run duration calculation."""
         
         # Mock daemon to test dry run calculation
+        outer_self = self
         class MockDaemon:
             def __init__(self):
-                self.enforcement_config = self.enforcement_config
-                self._start_time = self.daemon_start_time
+                self.enforcement_config = outer_self.enforcement_config
+                self._start_time = outer_self.daemon_start_time
             
             def _get_dry_run_remaining_days(self):
                 if not self._start_time:
@@ -603,7 +604,10 @@ class TestDryRunTimer:
     
     def test_emergency_stop_during_dry_run(self):
         """Test emergency stop functionality during dry run."""
-        blacklist_manager = BlacklistManager(self.enforcement_config)
+        # Need anonymizer or salt
+        from argus_v.oracle_core.anonymize import HashAnonymizer
+        anonymizer = HashAnonymizer(salt="test-salt")
+        blacklist_manager = BlacklistManager(self.enforcement_config, anonymizer)
         
         # Create emergency stop file
         blacklist_manager.emergency_stop("Test emergency during dry run")
