@@ -22,11 +22,9 @@ from __future__ import annotations
 import argparse
 import os
 import random
-import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -144,9 +142,9 @@ def generate_dataset(
     for _ in range(n_attack):
         samples.append(_gen_attack())
         labels.append(1)
-    combined = list(zip(samples, labels))
+    combined = list(zip(samples, labels, strict=True))
     random.shuffle(combined)
-    samples[:], labels[:] = zip(*combined)
+    samples[:], labels[:] = zip(*combined, strict=True)
     X = torch.tensor(samples, dtype=torch.float32).div_(255.0)
     y = torch.tensor(labels, dtype=torch.long)
     return X, y

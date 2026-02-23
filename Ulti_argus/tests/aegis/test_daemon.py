@@ -9,15 +9,23 @@ import pytest
 # Ensure src is in path for imports to work
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../src"))
 
-# Mock external dependencies that might be missing in the test environment
-# This must be done BEFORE importing modules from argus_v that rely on them
-for module in ['yaml', 'scapy', 'pandas', 'numpy', 'sklearn', 'skops', 'firebase_admin']:
-    sys.modules[module] = MagicMock()
+# Mock external dependencies ONLY if they are missing
+import importlib.util
 
-# Also mock submodules if necessary
-sys.modules['scapy.all'] = MagicMock()
-sys.modules['sklearn.ensemble'] = MagicMock()
-sys.modules['sklearn.preprocessing'] = MagicMock()
+def mock_if_missing(module_name):
+    if not sys.modules.get(module_name):
+        if importlib.util.find_spec(module_name) is None:
+            sys.modules[module_name] = MagicMock()
+
+for module in ['yaml', 'scapy', 'pandas', 'numpy', 'sklearn', 'skops', 'firebase_admin']:
+    mock_if_missing(module)
+
+# Also mock submodules if parent is mocked
+if isinstance(sys.modules.get('scapy'), MagicMock):
+    sys.modules['scapy.all'] = MagicMock()
+if isinstance(sys.modules.get('sklearn'), MagicMock):
+    sys.modules['sklearn.ensemble'] = MagicMock()
+    sys.modules['sklearn.preprocessing'] = MagicMock()
 
 from argus_v.aegis.config import (
     AegisConfig,

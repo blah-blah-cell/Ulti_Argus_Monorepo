@@ -6,19 +6,18 @@ models and scalers from Firebase Storage, with fallback support and caching.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import pickle
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-try:
-    import firebase_admin
-    from firebase_admin import credentials, storage
-    from google.cloud import storage as gcs
-    FIREBASE_AVAILABLE = True
-except ImportError:
-    FIREBASE_AVAILABLE = False
+# Check for Firebase availability without importing unused modules
+FIREBASE_AVAILABLE = (
+    importlib.util.find_spec("firebase_admin") is not None
+    and importlib.util.find_spec("google.cloud.storage") is not None
+)
 
 import numpy as np
 import pandas as pd

@@ -1,23 +1,26 @@
 import sys
 from unittest.mock import MagicMock
+import importlib.util
 
-sys.modules["yaml"] = MagicMock()
-sys.modules["numpy"] = MagicMock()
-sys.modules["pandas"] = MagicMock()
-sys.modules["sklearn"] = MagicMock()
-sys.modules["sklearn.ensemble"] = MagicMock()
-sys.modules["torch"] = MagicMock()
-sys.modules["torchvision"] = MagicMock()
-sys.modules["joblib"] = MagicMock()
+def mock_if_missing(module_name):
+    if not sys.modules.get(module_name):
+        if importlib.util.find_spec(module_name) is None:
+            sys.modules[module_name] = MagicMock()
 
-import shutil
-import sqlite3
-import tempfile
-import time
-from pathlib import Path
+for module in ["yaml", "numpy", "pandas", "sklearn", "torch", "torchvision", "joblib"]:
+    mock_if_missing(module)
 
-from argus_v.aegis.blacklist_manager import BlacklistManager
-from argus_v.oracle_core.anonymize import HashAnonymizer
+if isinstance(sys.modules.get('sklearn'), MagicMock):
+    sys.modules['sklearn.ensemble'] = MagicMock()
+
+import shutil  # noqa: E402
+import sqlite3  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from argus_v.aegis.blacklist_manager import BlacklistManager  # noqa: E402
+from argus_v.oracle_core.anonymize import HashAnonymizer  # noqa: E402
 
 
 class MockConfig:

@@ -2,7 +2,7 @@ import os
 import sys
 
 # Ensure src is in path so we can import modules when running directly
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 import unittest
 import unittest.mock

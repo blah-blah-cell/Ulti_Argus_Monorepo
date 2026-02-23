@@ -13,7 +13,6 @@ Both models operate on raw byte sequences of length *input_len* (default 1024),
 normalised to ``[0, 1]`` and shaped ``[B, 1, input_len]``.
 """
 
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 

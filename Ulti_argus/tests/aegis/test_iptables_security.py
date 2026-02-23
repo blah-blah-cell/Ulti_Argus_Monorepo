@@ -7,7 +7,14 @@ import pytest
 # Add the src directory to sys.path
 sys.path.append(os.path.join(os.getcwd(), "Ulti_argus/src"))
 
-# Mock all problematic modules
+# Mock all problematic modules conditionally
+import importlib.util
+
+def mock_if_missing(module_name):
+    if not sys.modules.get(module_name):
+        if importlib.util.find_spec(module_name) is None:
+            sys.modules[module_name] = MagicMock()
+
 mocks = [
     'yaml',
     'firebase_admin',
@@ -16,19 +23,23 @@ mocks = [
     'google.cloud',
     'google.cloud.storage',
     'sklearn',
-    'sklearn.ensemble',
-    'sklearn.preprocessing',
     'pandas',
     'numpy',
     'joblib',
     'skops',
     'skops.io',
     'scapy',
-    'scapy.all',
 ]
 
 for module in mocks:
-    sys.modules[module] = MagicMock()
+    mock_if_missing(module)
+
+# Submodules
+if isinstance(sys.modules.get('sklearn'), MagicMock):
+    sys.modules['sklearn.ensemble'] = MagicMock()
+    sys.modules['sklearn.preprocessing'] = MagicMock()
+if isinstance(sys.modules.get('scapy'), MagicMock):
+    sys.modules['scapy.all'] = MagicMock()
 
 from argus_v.aegis.blacklist_manager import BlacklistManager
 from argus_v.aegis.config import EnforcementConfig

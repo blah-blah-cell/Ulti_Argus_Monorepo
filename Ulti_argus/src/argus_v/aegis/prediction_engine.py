@@ -31,7 +31,6 @@ from .model_manager import ModelLoadError, ModelManager
 # Imports
 try:
     import torch
-    import numpy as np
     _TORCH_AVAILABLE = True
 except ImportError:
     _TORCH_AVAILABLE = False
@@ -649,10 +648,10 @@ class PredictionEngine:
             # Load CSV data
             try:
                 flows_df = self._load_csv_data(csv_file)
-            except CSVPollingError:
+            except CSVPollingError as e:
                 # If loading fails (e.g. malformed CSV), we should probably not retry forever.
                 # Treat as handled (failed permanently)
-                log_event(logger, "csv_load_permanent_failure", file_path=str(csv_file))
+                log_event(logger, "csv_load_permanent_failure", file_path=str(csv_file), error=str(e))
                 return True
 
             if flows_df.empty:
@@ -846,7 +845,7 @@ class PredictionEngine:
                 file_path=str(csv_file),
                 error=str(e)
             )
-            raise CSVPollingError(f"Failed to load CSV data: {e}")
+            raise CSVPollingError(f"Failed to load CSV data: {e}") from e
     
     def _clean_flow_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Clean and validate flow data.
@@ -953,7 +952,8 @@ class PredictionEngine:
             if self.anonymizer:
                 def safe_anonymize(ip):
                     try:
-                        if pd.isna(ip): return ""
+                        if pd.isna(ip):
+                            return ""
                         return self.anonymizer.anonymize_ip(str(ip))
                     except ValueError:
                         # Assume already anonymized or invalid, return as is
@@ -1044,7 +1044,7 @@ class PredictionEngine:
                         for p in payloads_to_scan:
                             try:
                                 cnn_scores.append(analyze_payload(p))
-                            except:
+                            except Exception:
                                 cnn_scores.append(0.0)
 
                     # Update predictions based on CNN scores

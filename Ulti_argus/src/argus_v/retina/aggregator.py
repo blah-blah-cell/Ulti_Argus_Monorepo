@@ -8,7 +8,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from queue import Queue
+from queue import Empty, Full, Queue
 from typing import Any, Callable, Dict, List, Optional
 
 from ..oracle_core.anonymize import hash_ip, round_epoch_seconds
@@ -158,7 +158,7 @@ class WindowAggregator:
         try:
             self._packet_queue.put_nowait(packet)
             return True
-        except:
+        except Full:
             # Queue full, packet dropped
             with self._lock:
                 self._stats["packets_dropped"] += 1
@@ -184,7 +184,7 @@ class WindowAggregator:
                 # Get packet with timeout
                 try:
                     packet = self._packet_queue.get(timeout=1.0)
-                except:
+                except Empty:
                     continue
                 
                 # Process the packet

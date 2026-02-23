@@ -556,19 +556,7 @@ class AegisDaemon:
                     start_http_server(9090)
                     log_event(logger, "prometheus_exporter_started", port=9090)
                 except Exception as e:
-                    log_event(logger, "prometheus_exporter_failed", error=str(e), level="error")               # Start Online Learning Thread
-                try:
-                    feedback_dir = Path(self.config.enforcement.feedback_dir)
-                    ol_thread = OnlineLearningThread(
-                        prediction_engine=prediction_engine,
-                        db_path=feedback_dir / "online_learning.db"
-                    )
-                    ol_thread.start()
-                    self._components['online_learning_thread'] = ol_thread
-                except Exception as ol_err:
-                    log_event(logger, "online_learning_start_failed", error=str(ol_err))
-
->>>>>>> main
+                    log_event(logger, "prometheus_exporter_failed", error=str(e), level="error")
                 log_event(
                     logger,
                     "aegis_daemon_started",

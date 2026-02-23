@@ -24,11 +24,11 @@ class ArgusPlugin(ABC):
         """Called when plugin is loaded"""
         pass
 
-    def on_packet(self, flow_data):
+    def on_packet(self, flow_data):  # noqa: B027
         """Optional: Inspect raw packet data (called by Aegis Core)"""
         pass
 
-    def on_payload(self, content):
+    def on_payload(self, content):  # noqa: B027
         """Optional: Inspect decrypted payload (called by Aegis Proxy/Mnemosyne)"""
         pass
 

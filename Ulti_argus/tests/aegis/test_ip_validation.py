@@ -3,18 +3,21 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Mock missing dependencies
-sys.modules['yaml'] = MagicMock()
-sys.modules['firebase_admin'] = MagicMock()
-sys.modules['google.cloud'] = MagicMock()
-sys.modules['scapy'] = MagicMock()
-sys.modules['scapy.all'] = MagicMock()
-sys.modules['pandas'] = MagicMock()
-sys.modules['numpy'] = MagicMock()
-sys.modules['sklearn'] = MagicMock()
-sys.modules['sklearn.ensemble'] = MagicMock()
-sys.modules['joblib'] = MagicMock()
-sys.modules['skops'] = MagicMock()
+# Mock missing dependencies conditionally
+import importlib.util
+
+def mock_if_missing(module_name):
+    if not sys.modules.get(module_name):
+        if importlib.util.find_spec(module_name) is None:
+            sys.modules[module_name] = MagicMock()
+
+for module in ['yaml', 'firebase_admin', 'google.cloud', 'scapy', 'pandas', 'numpy', 'sklearn', 'joblib', 'skops']:
+    mock_if_missing(module)
+
+if isinstance(sys.modules.get('scapy'), MagicMock):
+    sys.modules['scapy.all'] = MagicMock()
+if isinstance(sys.modules.get('sklearn'), MagicMock):
+    sys.modules['sklearn.ensemble'] = MagicMock()
 
 from argus_v.aegis.blacklist_manager import BlacklistManager
 
