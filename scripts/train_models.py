@@ -20,7 +20,7 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 
 # Add the Ulti_argus Python package to path so we can import the CNN architecture
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../Ulti_argus")))
@@ -81,13 +81,13 @@ def train_isolation_forest(records):
     X = df[IF_FEATURES].fillna(0).values
     
     # 2. Scale
-    print("[*] Fitting StandardScaler...")
-    scaler = StandardScaler()
+    print("[*] Fitting RobustScaler (better for heavy-tail network traffic)...")
+    scaler = RobustScaler()
     X_scaled = scaler.fit_transform(X)
     
     # 3. Train
-    print("[*] Training IsolationForest (contamination=0.1)...")
-    clf = IsolationForest(contamination=0.1, random_state=42, n_jobs=-1)
+    print("[*] Training IsolationForest (n_estimators=200, contamination=0.1)...")
+    clf = IsolationForest(n_estimators=200, contamination=0.1, random_state=42, n_jobs=-1)
     clf.fit(X_scaled)
     
     # 4. Evaluate
