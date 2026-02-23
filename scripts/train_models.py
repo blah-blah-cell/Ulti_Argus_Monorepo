@@ -18,6 +18,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.onnx
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.preprocessing import StandardScaler, RobustScaler
@@ -299,6 +300,39 @@ def validate_saved_models():
         print("[!] CNN: weights file not found (may have been skipped)")
     
     return ok
+
+    # 5. JIT Trace & Save
+    try:
+        print("[*] Tracing model for JIT compilation...")
+        model.eval()
+        # Create dummy input: [Batch=1, Channel=1, Length=1024]
+        dummy_input = torch.zeros(1, 1, 1024).to(device)
+        traced_model = torch.jit.trace(model, dummy_input)
+
+        jit_path = MODEL_DIR / "payload_classifier_jit.pt"
+        traced_model.save(jit_path)
+        print(f"[+] Saved JIT-compiled model -> {jit_path}")
+    except Exception as e:
+        print(f"[!] Failed to save JIT model: {e}")
+
+    # 6. ONNX Export
+    try:
+        print("[*] Exporting model to ONNX...")
+        onnx_path = MODEL_DIR / "payload_classifier.onnx"
+        torch.onnx.export(
+            model,
+            dummy_input,
+            onnx_path,
+            export_params=True,
+            opset_version=17,
+            do_constant_folding=True,
+            input_names=['input'],
+            output_names=['output'],
+            dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+        )
+        print(f"[+] Saved ONNX model -> {onnx_path}")
+    except Exception as e:
+        print(f"[!] Failed to export ONNX model: {e}")
 
 
 def main():

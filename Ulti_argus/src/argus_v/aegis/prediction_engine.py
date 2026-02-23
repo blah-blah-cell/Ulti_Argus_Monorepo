@@ -28,6 +28,14 @@ from ..oracle_core.logging import log_event
 from .blacklist_manager import BlacklistManager
 from .model_manager import ModelLoadError, ModelManager
 
+# Imports
+try:
+    import torch
+    import numpy as np
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _TORCH_AVAILABLE = False
+
 # Kronos is optional — import gracefully so Aegis works without it
 try:
     from ..kronos.router import KronosRouter, RoutingPath
@@ -38,6 +46,71 @@ except ImportError:
     KronosRouter = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+class JITInferenceEngine:
+    """JIT-compiled inference engine for batched payload analysis."""
+
+    def __init__(self, model_path: str | Path, device: str = "cpu"):
+        self.device = torch.device(device)
+        self.model = torch.jit.load(str(model_path), map_location=self.device)
+        self.model.eval()
+
+    def predict_batch(self, payloads: List[bytes]) -> List[float]:
+        if not payloads:
+            return []
+
+        # --- Stage 1: Heuristic Safety Filter (Reduce False Positives) ---
+        is_standard_web = []
+        for p in payloads:
+            safe = False
+            if p.startswith((b"GET /", b"POST /")):
+                if not any(x in p for x in [b"'", b"\"", b";", b"<", b">", b"../"]):
+                    safe = True
+            is_standard_web.append(safe)
+
+        # --- Stage 2: Neural Inference ---
+        tensors = []
+        for p in payloads:
+            data = list(p[:1024])
+            if len(data) < 1024:
+                data += [0] * (1024 - len(data))
+            tensors.append(data)
+
+        # [Batch, 1024] -> [Batch, 1, 1024]
+        X = torch.tensor(tensors, dtype=torch.float32, device=self.device) / 255.0
+        X = X.unsqueeze(1)
+
+        with torch.no_grad():
+            logits = self.model(X)
+            probs = torch.softmax(logits, dim=1)
+            raw_scores = probs[:, 1].tolist() # Attack probability
+
+        # --- Stage 3: Threat Boosters (Catch False Negatives) ---
+        dangerous_patterns = [
+            b"/etc/passwd", b"cmd.exe", b"/bin/sh",
+            b"SELECT * FROM", b"UNION SELECT",
+            b"<script>", b"onerror=", b"javascript:",
+            b"curl http", b"wget http"
+        ]
+
+        final_scores = []
+        for i, raw_score in enumerate(raw_scores):
+            payload = payloads[i]
+            boost = 0.0
+            payload_lower = payload.lower()
+            for pattern in dangerous_patterns:
+                if pattern.lower() in payload_lower:
+                    boost += 0.5
+
+            final_score = raw_score + boost
+
+            if is_standard_web[i] and final_score < 1.0:
+                final_score = min(final_score, 0.1)
+
+            final_scores.append(min(max(final_score, 0.0), 1.0))
+
+        return final_scores
 
 
 class PredictionEngineError(Exception):
@@ -105,6 +178,9 @@ class PredictionEngine:
         self.ipc_listener = ipc_listener
         self.metrics = metrics
         
+        # JIT Model
+        self.jit_engine = None
+
         # State tracking
         self._running = False
         self._poll_thread = None
@@ -112,6 +188,10 @@ class PredictionEngine:
         self._ipc_thread = None
         self._csv_queue = Queue()
         self._processed_files = set()
+
+        # IPC batching
+        self.ipc_batch_queue = []
+        self.ipc_last_process_time = 0.0
         
         # Statistics
         self._stats = {
@@ -140,6 +220,33 @@ class PredictionEngine:
             batch_size=self.polling_config.batch_size
         )
     
+    def _load_jit_model(self) -> None:
+        """Load the JIT-compiled payload classifier."""
+        try:
+            # Determine path from model_manager config or default
+            model_dir = Path(self.model_manager.config.model_local_path)
+            jit_path = model_dir / "payload_classifier_jit.pt"
+
+            if jit_path.exists():
+                log_event(logger, "loading_jit_model", path=str(jit_path))
+                self.jit_engine = JITInferenceEngine(jit_path)
+                log_event(logger, "jit_model_loaded", level="info")
+            else:
+                log_event(logger, "jit_model_not_found", path=str(jit_path), level="warning")
+        except Exception as e:
+            log_event(logger, "jit_model_load_failed", error=str(e), level="error")
+            self.jit_engine = None
+
+    def _warmup_model(self) -> None:
+        """Run a dummy inference to trigger JIT optimization."""
+        if self.jit_engine:
+            try:
+                log_event(logger, "warming_up_jit_model", level="debug")
+                self.jit_engine.predict_batch([b"warmup_payload_data" * 10])
+                log_event(logger, "jit_model_warmup_complete", level="info")
+            except Exception as e:
+                log_event(logger, "jit_model_warmup_failed", error=str(e), level="warning")
+
     def start(self) -> bool:
         """Start the prediction engine.
         
@@ -197,6 +304,11 @@ class PredictionEngine:
                     level="info"
                 )
             
+            # Load and warmup JIT model
+            if _KRONOS_AVAILABLE:
+                self._load_jit_model()
+                self._warmup_model()
+
             log_event(
                 logger,
                 "prediction_engine_started",
@@ -426,31 +538,46 @@ class PredictionEngine:
                     time.sleep(5)
                     continue
 
-                # Blocks for up to 1 second waiting for a frame
-                try:
-                    frame = self.ipc_listener.get_frame(timeout=1.0)
-                except Exception as e:
-                    log_event(logger, "ipc_listener_error", level="error", error=str(e))
-                    time.sleep(1)
+                # Accumulate batch
+                start_collect = time.time()
+                while len(self.ipc_batch_queue) < self.polling_config.batch_size:
+                    # Check timeout (max latency 100ms)
+                    if self.ipc_batch_queue and (time.time() - start_collect > 0.1):
+                        break
+
+                    try:
+                        # Short timeout for polling
+                        frame = self.ipc_listener.get_frame(timeout=0.05)
+                        if frame:
+                            self.ipc_batch_queue.append(frame)
+                    except Exception:
+                        pass # Timeout or error, just continue loop
+
+                    if not self._running:
+                        break
+
+                if not self.ipc_batch_queue:
                     continue
 
-                if not frame:
-                    continue  # Timeout, check self._running and try again
+                # Process collected batch
+                frames = list(self.ipc_batch_queue)
+                self.ipc_batch_queue.clear()
                 
-                # Convert a single FlowFrame to a DataFrame matching the model's expected shape
+                # Convert multiple FlowFrames to a DataFrame
                 try:
                     flow_dict = {
-                        "src_ip": [frame.src_ip],
-                        "dst_ip": [frame.dst_ip],
-                        "src_port": [frame.src_port],
-                        "dst_port": [frame.dst_port],
-                        "protocol": [frame.protocol],
-                        "bytes_in": [frame.bytes_in],
-                        "bytes_out": [frame.bytes_out],
-                        "duration": [frame.duration],
-                        "packets_in": [1], # Approximation for missing packet counts
-                        "packets_out": [0],
-                        "timestamp": [datetime.now()]
+                        "src_ip": [f.src_ip for f in frames],
+                        "dst_ip": [f.dst_ip for f in frames],
+                        "src_port": [f.src_port for f in frames],
+                        "dst_port": [f.dst_port for f in frames],
+                        "protocol": [f.protocol for f in frames],
+                        "bytes_in": [f.bytes_in for f in frames],
+                        "bytes_out": [f.bytes_out for f in frames],
+                        "duration": [f.duration for f in frames],
+                        "packets_in": [1] * len(frames),
+                        "packets_out": [0] * len(frames),
+                        "timestamp": [datetime.now()] * len(frames),
+                        "__raw_payload__": [f.payload for f in frames]
                     }
 
                     df = pd.DataFrame(flow_dict)
@@ -478,13 +605,13 @@ class PredictionEngine:
                     log_event(logger, "ipc_model_prediction_error", level="error", error=str(e))
                     continue
                 
-                # We need to inject the payload bytes back into the router loop if it requests it.
+                # Process batch predictions
                 try:
-                    predictions_df['__raw_payload__'] = [frame.payload]
+                    # Payload is already in the dataframe from flow_dict
                     self._process_batch_predictions(predictions_df)
 
-                    self._stats['total_flows_processed'] += 1
-                    self._stats['total_predictions_made'] += 1
+                    self._stats['total_flows_processed'] += len(predictions_df)
+                    self._stats['total_predictions_made'] += len(predictions_df)
                 except Exception as e:
                     log_event(logger, "ipc_batch_processing_error", level="error", error=str(e))
 
@@ -868,7 +995,77 @@ class PredictionEngine:
             predictions_df: DataFrame with prediction results
         """
         try:
+            # 1. Kronos Triage & Escalation (Batch Mode)
+            if self.kronos_router is not None:
+                payloads_to_scan = []
+                indices_to_scan = []
+
+                # First pass: Ask Kronos what to do
+                for idx, row in predictions_df.iterrows():
+                    src_ip = row.get('src_ip', '')
+                    dst_ip = row.get('dst_ip', '')
+                    payload_bytes = row.get('__raw_payload__', None)
+                    anomaly_score = row.get('anomaly_score', 0)
+
+                    try:
+                        decision = self.kronos_router.route(
+                            if_score=float(anomaly_score),
+                            src_ip=str(src_ip) if src_ip else "",
+                            dst_ip=str(dst_ip) if dst_ip else "",
+                            protocol=str(row.get('protocol', 'OTHER')),
+                            dst_port=int(row.get('dst_port', 0)),
+                            payload_available=(payload_bytes is not None),
+                        )
+
+                        if decision.path == RoutingPath.PASS:
+                            predictions_df.at[idx, 'prediction'] = 1 # Force Normal
+                            predictions_df.at[idx, '__skip_enforcement__'] = True
+                            log_event(logger, "kronos_fast_pass", src_ip=src_ip, if_score=float(anomaly_score))
+
+                        elif decision.path == RoutingPath.ESCALATE:
+                            payloads_to_scan.append(payload_bytes or b"")
+                            indices_to_scan.append(idx)
+
+                    except Exception as e:
+                        log_event(logger, "kronos_route_error", error=str(e))
+
+                # Batch Scan with CNN
+                if payloads_to_scan:
+                    cnn_scores = []
+                    # Try JIT model first
+                    if self.jit_engine:
+                        try:
+                            cnn_scores = self.jit_engine.predict_batch(payloads_to_scan)
+                        except Exception as e:
+                            log_event(logger, "jit_batch_predict_failed", error=str(e))
+
+                    # Fallback to legacy if JIT failed or unavailable
+                    if not cnn_scores:
+                        for p in payloads_to_scan:
+                            try:
+                                cnn_scores.append(analyze_payload(p))
+                            except:
+                                cnn_scores.append(0.0)
+
+                    # Update predictions based on CNN scores
+                    for i, idx in enumerate(indices_to_scan):
+                        score = cnn_scores[i]
+                        row = predictions_df.loc[idx]
+                        src_ip = row.get('src_ip', '')
+                        anomaly_score = row.get('anomaly_score', 0)
+
+                        log_event(logger, "kronos_cnn_escalation", src_ip=src_ip, if_score=float(anomaly_score), cnn_score=score)
+
+                        if score < 0.30:
+                            predictions_df.at[idx, 'prediction'] = 1 # Suppress
+                            predictions_df.at[idx, '__skip_enforcement__'] = True
+                        elif score >= 0.65:
+                            predictions_df.at[idx, 'prediction'] = -1 # Confirm Anomaly
+
             for _, row in predictions_df.iterrows():
+                if row.get('__skip_enforcement__', False):
+                    continue
+
                 try:
                     # Determine if action is needed
                     action_needed = False
@@ -883,66 +1080,6 @@ class PredictionEngine:
                     # Check for trusted IPs (Immediate Relief)
                     src_ip = row.get('src_ip', '')
                     dst_ip = row.get('dst_ip', '')
-
-                    # ── Kronos triage ──────────────────────────────────────────
-                    # If a KronosRouter is wired in, ask it how to handle this
-                    # flow before we apply any enforcement logic.
-                    if self.kronos_router is not None:
-                        try:
-                            # Extract payload if it came from IPC socket
-                            payload_bytes = row.get('__raw_payload__', None)
-
-                            kronos_decision = self.kronos_router.route(
-                                if_score=float(anomaly_score),
-                                src_ip=str(src_ip) if src_ip else "",
-                                dst_ip=str(dst_ip) if dst_ip else "",
-                                protocol=str(row.get('protocol', 'OTHER')),
-                                dst_port=int(row.get('dst_port', 0)),
-                                payload_available=(payload_bytes is not None),
-                            )
-
-                            if kronos_decision.path == RoutingPath.PASS:
-                                # Kronos is confident this is normal — skip entirely
-                                log_event(
-                                    logger,
-                                    "kronos_fast_pass",
-                                    level="debug",
-                                    src_ip=src_ip,
-                                    if_score=float(anomaly_score),
-                                )
-                                continue
-
-                            if kronos_decision.path == RoutingPath.ESCALATE:
-                                # Kronos wants CNN to weigh in — use pytorch_inference
-                                # (payload is None here; CNN will return 0.0 gracefully)
-                                try:
-                                    cnn_score = analyze_payload(payload_bytes or b"")
-                                    log_event(
-                                        logger,
-                                        "kronos_cnn_escalation",
-                                        level="info",
-                                        src_ip=src_ip,
-                                        if_score=float(anomaly_score),
-                                        cnn_score=cnn_score,
-                                    )
-                                    # If CNN is confident it's normal, suppress
-                                    if cnn_score < 0.30:
-                                        continue
-                                    # If CNN confirms attack, force anomaly flag
-                                    if cnn_score >= 0.65:
-                                        prediction = -1
-                                except Exception as cnn_err:
-                                    log_event(
-                                        logger,
-                                        "kronos_cnn_escalation_failed",
-                                        level="warning",
-                                        error=str(cnn_err),
-                                    )
-                            # RoutingPath.IF_ONLY → fall through to normal IF logic
-                        except Exception as kronos_err:
-                            log_event(logger, "kronos_processing_failed", level="error", error=str(kronos_err))
-                            # Fallback to standard logic if Kronos fails
-                    # ──────────────────────────────────────────────────────────
 
                     is_trusted = False
                     if self.feedback_manager:
