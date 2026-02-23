@@ -5,10 +5,18 @@
 
 set -euo pipefail
 
+# Get script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+echo "================================================="
+echo "   Ulti_Argus & DeepPacketSentinel Installer     "
+echo "================================================="
+
 # --- Configuration ---
 INSTALL_DIR="/opt/argus_v"
 BACKUP_DIR="/tmp/argus_backup_$(date +%s)"
 DRY_RUN=false
+PYTHON_BIN=${PYTHON_BIN:-python3}
 
 # --- Colors ---
 RED=""
@@ -103,14 +111,14 @@ check_kernel() {
 }
 
 check_python() {
-    log_info "Checking Python version..."
-    if ! command -v python3 >/dev/null 2>&1; then
-        log_error "Python 3 is not installed (unexpected after system deps install)."
+    log_info "Checking Python version using binary: $PYTHON_BIN..."
+    if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+        log_error "Python binary '$PYTHON_BIN' is not installed."
         exit 1
     fi
 
-    if ! python3 -c "import sys; exit(0 if sys.version_info >= (3, 11) else 1)"; then
-        log_error "Python 3.11+ is required. Found $(python3 --version)."
+    if ! "$PYTHON_BIN" -c "import sys; exit(0 if sys.version_info >= (3, 11) else 1)"; then
+        log_error "Python 3.11+ is required. Found $("$PYTHON_BIN" --version 2>&1)."
         log_error "Please upgrade Python or use Ubuntu 24.04 / Debian 12."
         exit 1
     fi
@@ -164,13 +172,13 @@ install_system_deps() {
     log_info "Installing system packages..."
     export DEBIAN_FRONTEND=noninteractive
 
-    local PACKAGES="clang llvm libelf-dev libpcap-dev gcc-multilib build-essential python3 python3-pip python3-venv curl git pkg-config"
-
-    if dpkg -s $PACKAGES >/dev/null 2>&1; then
-        log_info "All system packages are already installed."
+    # Combining logic from main branch to support variable PYTHON_BIN
+    run_cmd apt-get update
+    if run_cmd apt-get install -y clang llvm libelf-dev libpcap-dev gcc-multilib build-essential "$PYTHON_BIN" "$PYTHON_BIN-venv" "$PYTHON_BIN-dev" python3-pip curl git pkg-config; then
+        log_success "System dependencies installed successfully."
     else
-        run_cmd apt-get update
-        run_cmd apt-get install -y $PACKAGES
+        log_warn "Specific python packages for $PYTHON_BIN might be missing. Proceeding with python3-pip fallback..."
+        run_cmd apt-get install -y clang llvm libelf-dev libpcap-dev gcc-multilib build-essential "$PYTHON_BIN" python3-pip curl git pkg-config
     fi
 }
 
@@ -204,7 +212,6 @@ install_rust() {
 
 build_dps() {
     log_info "Building DeepPacketSentinel..."
-    local SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
     local DPS_DIR="$SCRIPT_DIR/DeepPacketSentinel"
 
     if [ ! -d "$DPS_DIR" ]; then
@@ -235,8 +242,7 @@ build_dps() {
 }
 
 install_argus() {
-    log_info "Installing Ulti_argus..."
-    local SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+    log_info "Installing Ulti_argus Python AI..."
     local ARGUS_SRC="$SCRIPT_DIR/Ulti_argus"
     local DPS_SRC="$SCRIPT_DIR/DeepPacketSentinel"
 
@@ -248,9 +254,9 @@ install_argus() {
 
     # Python Venv
     if [ ! -d "$INSTALL_DIR/venv" ]; then
-        log_info "Creating virtual environment..."
+        log_info "Creating virtual environment using $PYTHON_BIN..."
         cd "$ARGUS_SRC"
-        run_cmd python3 -m venv "$INSTALL_DIR/venv"
+        run_cmd "$PYTHON_BIN" -m venv "$INSTALL_DIR/venv"
         run_cmd "$INSTALL_DIR/venv/bin/pip" install -U pip wheel
     else
         log_info "Virtual environment exists. Skipping creation."
@@ -271,13 +277,12 @@ install_argus() {
     else
         run_cmd mkdir -p "$INSTALL_DIR/models"
         # We need to ensure we run this with the venv python
-        run_cmd "$INSTALL_DIR/venv/bin/python3" "$SCRIPT_DIR/scripts/train_models.py"
+        run_cmd "$INSTALL_DIR/venv/bin/python" "$SCRIPT_DIR/scripts/train_models.py"
     fi
 }
 
 setup_services() {
     log_info "Configuring systemd services..."
-    local SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
     run_cmd cp "$SCRIPT_DIR/systemd/argus-sentinel.service" "/etc/systemd/system/"
     run_cmd cp "$SCRIPT_DIR/systemd/argus-brain.service" "/etc/systemd/system/"

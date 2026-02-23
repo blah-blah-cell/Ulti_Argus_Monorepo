@@ -508,6 +508,18 @@ class AegisConfig:
         }
 
 
+def get_default_config_path() -> Path:
+    """Get the default configuration file path.
+
+    Checks ``ARGUS_CONFIG_FILE`` env-var first, then falls back to the
+    standard system path ``/etc/argus/aegis.yaml``.
+    """
+    env_path = os.environ.get("ARGUS_CONFIG_FILE")
+    if env_path:
+        return Path(env_path)
+    return Path("/etc/argus/aegis.yaml")
+
+
 def load_aegis_config(
     path: str | os.PathLike[str],
     *,
