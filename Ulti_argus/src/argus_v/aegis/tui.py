@@ -1,157 +1,27 @@
 """Terminal User Interface (TUI) for Aegis.
 
-Uses the `rich` library to build a live-updating dashboard summarizing
-the Aegis runtime state, statistics, and the active eBPF/iptables
-blocklist.
+Uses the `textual` library to build a live-updating interactive command center.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
-import os
-import sqlite3
 import sys
-import time
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List
 
-try:
-    from rich.align import Align
-    from rich.console import Console
-    from rich.layout import Layout
-    from rich.live import Live
-    from rich.panel import Panel
-    from rich.table import Table
-    from rich.text import Text
-except ImportError:
-    print("Error: The 'rich' library is required for the TUI.")
-    print("Run: pip install rich")
-    sys.exit(1)
+import httpx
+from rich.table import Table
+from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.containers import Container, Horizontal, Vertical
+from textual.widgets import Header, Footer, Static, DataTable, Input, Log, Label
+from textual.binding import Binding
 
-from .config import get_default_config_path, load_aegis_config
+class StatsPanel(Static):
+    """Panel displaying real-time statistics."""
 
-
-class AegisDashboard:
-    """Live-updating Terminal Dashboard for Aegis."""
-
-    def __init__(self, config_path: str = None):
-        self.console = Console()
-        if config_path is None:
-            config_path = str(get_default_config_path())
-        self.config = load_aegis_config(config_path)
-        
-        # Paths to poll
-        self.stats_file = Path(self.config.stats_file)
-        self.blacklist_db = Path(self.config.blacklist_db_path)
-        self.state_file = Path(self.config.state_file)
-
-        # Persistent DB connection
-        self._conn = None
-
-        # Caching
-        self._stats_cache = {}
-        self._stats_mtime = 0.0
-        self._state_cache = "Not Running / Unknown"
-        self._state_mtime = 0.0
-
-        # Layout reuse
-        self.layout = Layout()
-        self.layout.split_column(
-            Layout(name="header", size=3),
-            Layout(name="main")
-        )
-        self.layout["main"].split_row(
-            Layout(name="left_panel", ratio=1),
-            Layout(name="right_panel", ratio=2)
-        )
-
-    def _get_db_connection(self):
-        """Get or create a persistent SQLite connection."""
-        if self._conn:
-            return self._conn
-
-        if self.blacklist_db.exists():
-            try:
-                self._conn = sqlite3.connect(self.blacklist_db, check_same_thread=False)
-                return self._conn
-            except Exception:
-                pass
-        return None
-
-    def _read_stats(self) -> Dict[str, Any]:
-        """Read the Aegis stats.json file safely."""
-        try:
-            if self.stats_file.exists():
-                mtime = os.stat(self.stats_file).st_mtime
-                if mtime != self._stats_mtime:
-                    with open(self.stats_file, "r") as f:
-                        self._stats_cache = json.load(f)
-                        self._stats_mtime = mtime
-                return self._stats_cache
-        except Exception:
-            pass
-        return {}
-
-    def _read_engine_state(self) -> str:
-        """Read the Aegis state.json file safely."""
-        try:
-            if self.state_file.exists():
-                mtime = os.stat(self.state_file).st_mtime
-                if mtime != self._state_mtime:
-                    with open(self.state_file, "r") as f:
-                        state = json.load(f)
-                        self._state_cache = state.get("state", "UNKNOWN")
-                        self._state_mtime = mtime
-                return self._state_cache
-        except Exception:
-            pass
-        return "Not Running / Unknown"
-
-    def _read_active_blocks(self, limit: int = 15) -> List[tuple]:
-        """Read the latest active blocks from the SQLite DB."""
-        conn = self._get_db_connection()
-        if not conn:
-            return []
-
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT ip_address, reason, risk_level, source, created_at, hit_count
-                FROM blacklist
-                WHERE is_active = TRUE
-                ORDER BY created_at DESC
-                LIMIT ?
-            """, (limit,))
-            return cursor.fetchall()
-        except Exception:
-            # Reset connection on failure
-            try:
-                conn.close()
-            except Exception:
-                pass
-            self._conn = None
-            return []
-
-    def make_header(self) -> Panel:
-        """Create the top header pane."""
-        state = self._read_engine_state()
-        color = "green" if state.upper() == "RUNNING" else "red"
-        
-        grid = Table.grid(expand=True)
-        grid.add_column(justify="left", ratio=1)
-        grid.add_column(justify="right")
-        
-        title = Text("Ulti_Argus Aegis - Live Dashboard", style="bold cyan")
-        status = Text(f"Engine State: {state.upper()}", style=f"bold {color}")
-        
-        grid.add_row(title, status)
-        return Panel(grid, style="cyan")
-
-    def make_stats_panel(self) -> Panel:
-        """Create the statistics pane."""
-        stats = self._read_stats()
-        
+    def update_stats(self, stats: Dict[str, Any], health: Dict[str, Any]):
         table = Table(show_header=False, expand=True, box=None)
         table.add_column("Metric", style="cyan")
         table.add_column("Value", style="bold white")
@@ -160,9 +30,9 @@ class AegisDashboard:
         total_flows = str(stats.get("total_flows_processed", 0))
         anomalies = str(stats.get("anomalies_detected", 0))
         predictions = str(stats.get("total_predictions_made", 0))
-        blocks = str(stats.get("active_blacklist_entries", 0))
         
-        uptime = stats.get("uptime_seconds", 0)
+        service_info = health.get("service_info", {})
+        uptime = service_info.get("uptime_seconds", 0)
         
         # Convert uptime to H:M:S
         m, s = divmod(int(uptime), 60)
@@ -173,89 +43,252 @@ class AegisDashboard:
         table.add_row("Total Flows Analyzed", total_flows)
         table.add_row("Total Predictions", predictions)
         table.add_row("Anomalies Caught", f"[red]{anomalies}[/red]")
-        table.add_row("Active eBPF/OS Blocks", f"[yellow]{blocks}[/yellow]")
         
-        return Panel(
-            Align.center(table, vertical="middle"), 
-            title="[bold]Real-Time Telemetry[/bold]", 
-            border_style="blue"
-        )
+        self.update(table)
 
-    def make_blocklist_table(self) -> Panel:
-        """Create a table showing the currently active blocked IPs."""
-        blocks = self._read_active_blocks()
+class ModelMetricsPanel(Static):
+    """Panel displaying model performance metrics."""
+
+    def update_metrics(self, stats: Dict[str, Any]):
+        table = Table(show_header=False, expand=True, box=None)
+        table.add_column("Metric", style="magenta")
+        table.add_column("Value", style="bold green")
+
+        # Mock metrics if not present, or extract from prediction_stats
+        prediction_stats = stats.get("prediction_stats", {})
         
-        table = Table(
-            expand=True, 
-            show_lines=True, 
-            header_style="bold magenta", 
-            border_style="magenta"
-        )
-        table.add_column("IP Address", style="bold cyan", width=16)
-        table.add_column("Risk", justify="center", width=10)
-        table.add_column("Reason", style="white")
-        table.add_column("Hits", justify="right", width=6)
-        table.add_column("Blocked At", style="dim", width=20)
+        latency = prediction_stats.get("avg_inference_latency_ms", 0.0)
+        accuracy = "N/A" # Live accuracy is hard
+        fpr = "N/A" # False Positive Rate
+
+        table.add_row("Inference Latency", f"{latency:.2f} ms")
+        table.add_row("Model Accuracy (Est)", accuracy)
+        table.add_row("False Positive Rate", fpr)
+        table.add_row("Active Model", stats.get("model_info", {}).get("model_type", "Unknown"))
         
-        for ip, reason, risk, source, created_at, hit_count in blocks:
-            # Colorize risk
-            risk_color = "yellow"
+        self.update(table)
+
+class ActiveBlocksPanel(DataTable):
+    """Panel displaying active blocks."""
+
+    def on_mount(self) -> None:
+        self.cursor_type = "row"
+        self.zebra_stripes = True
+        self.border_title = "Active eBPF Enforcements (BLOCKLIST)"
+        self.add_columns("IP Address", "Risk", "Reason", "Hits", "Blocked At")
+
+    def update_blocks(self, entries: List[Dict[str, Any]]):
+        self.clear()
+        for entry in entries:
+            ip = entry.get('ip_address', 'Unknown')
+            risk = entry.get('risk_level', 'medium')
+            reason = entry.get('reason', 'N/A')
+            hits = str(entry.get('hit_count', 0))
+            created = str(entry.get('created_at', ''))
+
+            # Formatting logic
+            risk_styled = Text(risk.upper())
             if risk == "critical":
-                risk_color = "bold red"
+                risk_styled.stylize("bold red")
             elif risk == "high":
-                risk_color = "red"
-            
-            # Format datetime
-            try:
-                dt = datetime.fromisoformat(created_at).strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                dt = str(created_at)
+                risk_styled.stylize("red")
+            elif risk == "medium":
+                risk_styled.stylize("yellow")
 
-            table.add_row(
-                ip,
-                f"[{risk_color}]{risk.upper()}[/{risk_color}]",
-                reason,
-                str(hit_count),
-                dt
-            )
-            
-        if not blocks:
-            table = Align.center(Text("No active blocks at this time.", style="dim italic"))
+            self.add_row(ip, risk_styled, reason, hits, created)
 
-        return Panel(
-            table, 
-            title="[bold red]Active eBPF Enforcements (BLOCKLIST)[/bold red]", 
-            border_style="red"
+class AegisApp(App):
+    CSS = """
+    Screen {
+        layout: vertical;
+    }
+
+    Header {
+        dock: top;
+    }
+
+    Footer {
+        dock: bottom;
+    }
+
+    Input {
+        dock: bottom;
+        margin: 0 0 1 0;
+    }
+
+    #main-container {
+        layout: vertical;
+        height: 1fr;
+    }
+
+    #top-row {
+        layout: horizontal;
+        height: 1fr;
+    }
+
+    StatsPanel {
+        width: 1fr;
+        border: solid blue;
+        height: 100%;
+    }
+
+    ModelMetricsPanel {
+        width: 1fr;
+        border: solid magenta;
+        height: 100%;
+    }
+
+    ActiveBlocksPanel {
+        height: 2fr;
+        border: solid red;
+    }
+
+    Log {
+        height: 10;
+        border: solid green;
+        dock: bottom;
+    }
+    """
+
+    BINDINGS = [("q", "quit", "Quit")]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        yield Container(
+            Horizontal(
+                StatsPanel(id="stats-panel"),
+                ModelMetricsPanel(id="metrics-panel"),
+                id="top-row"
+            ),
+            ActiveBlocksPanel(id="blocks-panel"),
+            id="main-container"
         )
+        yield Log(id="log")
+        yield Input(placeholder="Enter command (:block <ip>, :whitelist <ip>, :retrain, :status)...", id="command-input")
+        yield Footer()
 
-    def update_content(self) -> Layout:
-        """Update the content of the existing layout."""
-        self.layout["header"].update(self.make_header())
-        self.layout["left_panel"].update(self.make_stats_panel())
-        self.layout["right_panel"].update(self.make_blocklist_table())
-        return self.layout
+    async def on_mount(self) -> None:
+        self.log_widget = self.query_one(Log)
+        self.stats_panel = self.query_one(StatsPanel)
+        self.metrics_panel = self.query_one(ModelMetricsPanel)
+        self.blocks_panel = self.query_one(ActiveBlocksPanel)
 
-    def run(self):
-        """Start the live UI loop."""
-        print("Starting Aegis Live TUI...")
-        
-        # Initial population
-        self.update_content()
+        self.log_widget.write("Welcome to Aegis Command Center.")
+        self.log_widget.write("Connecting to daemon...")
 
-        with Live(self.layout, refresh_per_second=2, screen=True) as live:
+        # Start workers
+        self.run_worker(self.websocket_worker(), exclusive=True)
+        self.run_worker(self.blocks_worker(), exclusive=True)
+
+    async def websocket_worker(self):
+        import websockets
+        uri = "ws://localhost:8081/ws"
+        while True:
             try:
-                while True:
-                    time.sleep(1.0) # Refresh every second
-                    live.update(self.update_content())
-            except KeyboardInterrupt:
-                pass
+                async with websockets.connect(uri) as websocket:
+                    self.log_widget.write("Connected to daemon (WebSocket).")
+                    while True:
+                        message = await websocket.recv()
+                        data = json.loads(message)
+                        self.call_from_thread(self.update_ui, data)
+            except Exception as e:
+                # self.log_widget.write(f"WS Connection lost: {e}. Retrying in 5s...")
+                await asyncio.sleep(5)
 
+    async def blocks_worker(self):
+        base_url = "http://localhost:8081/api"
+        async with httpx.AsyncClient() as client:
+            while True:
+                try:
+                    response = await client.get(f"{base_url}/blacklist", params={"limit": 50})
+                    if response.status_code == 200:
+                        entries = response.json()
+                        self.call_from_thread(self.blocks_panel.update_blocks, entries)
+                except Exception:
+                    pass
+                await asyncio.sleep(2)
+
+    def update_ui(self, data: Dict[str, Any]):
+        stats = data.get("stats", {})
+        health = data.get("health", {})
+        
+        self.stats_panel.update_stats(stats, health)
+        self.metrics_panel.update_metrics(data)
+
+    async def on_input_submitted(self, message: Input.Submitted) -> None:
+        command = message.value.strip()
+        message.input.value = ""
+
+        if not command:
+            return
+
+        self.log_widget.write(f"> {command}")
+        await self.process_command(command)
+
+    async def process_command(self, command: str):
+        parts = command.split()
+        cmd = parts[0].lower()
+        args = parts[1:]
+
+        base_url = "http://localhost:8081/api"
+
+        async with httpx.AsyncClient() as client:
+            try:
+                if cmd == ":block" and args:
+                    ip = args[0]
+                    payload = {"reason": "Manual TUI block", "risk_level": "medium"}
+                    response = await client.post(f"{base_url}/blacklist/{ip}", json=payload)
+                    if response.status_code == 200:
+                        self.log_widget.write(f"Success: {response.json()}")
+                    else:
+                        self.log_widget.write(f"Error: {response.status_code} - {response.text}")
+                    # Trigger immediate refresh of blocks
+                    await self.blocks_worker_once(client, base_url)
+
+                elif cmd == ":whitelist" and args:
+                    ip = args[0]
+                    response = await client.post(f"{base_url}/whitelist/{ip}")
+                    if response.status_code == 200:
+                        self.log_widget.write(f"Success: {response.json()}")
+                    else:
+                        self.log_widget.write(f"Error: {response.status_code} - {response.text}")
+                    await self.blocks_worker_once(client, base_url)
+
+                elif cmd == ":retrain":
+                    response = await client.post(f"{base_url}/retrain")
+                    if response.status_code == 200:
+                        self.log_widget.write(f"Success: {response.json()}")
+                    else:
+                        self.log_widget.write(f"Error: {response.status_code} - {response.text}")
+
+                elif cmd == ":status":
+                    response = await client.get(f"{base_url}/status")
+                    if response.status_code == 200:
+                        self.log_widget.write(f"Status: {json.dumps(response.json(), indent=2)}")
+                    else:
+                        self.log_widget.write(f"Error: {response.status_code} - {response.text}")
+
+                elif cmd == ":quit":
+                    self.exit()
+
+                else:
+                    self.log_widget.write(f"Unknown command: {cmd}")
+
+            except Exception as e:
+                self.log_widget.write(f"Error executing command: {e}")
+
+    async def blocks_worker_once(self, client, base_url):
+        try:
+            response = await client.get(f"{base_url}/blacklist", params={"limit": 50})
+            if response.status_code == 200:
+                entries = response.json()
+                self.call_from_thread(self.blocks_panel.update_blocks, entries)
+        except Exception:
+            pass
 
 def main():
-    """CLI Entrypoint for argus-tui."""
-    dashboard = AegisDashboard()
-    dashboard.run()
-
+    app = AegisApp()
+    app.run()
 
 if __name__ == "__main__":
     main()

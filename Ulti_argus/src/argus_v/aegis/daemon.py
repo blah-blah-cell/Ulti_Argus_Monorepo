@@ -14,11 +14,15 @@ import signal
 import sys
 import threading
 import time
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
+import uvicorn
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from pydantic import BaseModel
 
 from ..oracle_core.config import ValidationError
 from ..oracle_core.logging import configure_logging, log_event
@@ -36,6 +40,137 @@ except ImportError:
     _KRONOS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+# API Models
+class BlockRequest(BaseModel):
+    reason: str = "Manual blacklist"
+    risk_level: str = "medium"
+    ttl_hours: Optional[int] = None
+
+
+app = FastAPI(title="Aegis Daemon API")
+
+
+@app.post("/api/whitelist/{ip}")
+async def whitelist_ip(ip: str):
+    """Manually whitelist an IP address."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('blacklist_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or BlacklistManager not available")
+
+    success = daemon._components['blacklist_manager'].remove_from_blacklist(ip, source="manual")
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to whitelist IP")
+    return {"message": f"IP {ip} whitelisted"}
+
+
+@app.post("/api/blacklist/{ip}")
+async def blacklist_ip(ip: str, request: BlockRequest):
+    """Manually blacklist an IP address."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('blacklist_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or BlacklistManager not available")
+
+    success = daemon._components['blacklist_manager'].add_to_blacklist(
+        ip_address=ip,
+        reason=request.reason,
+        risk_level=request.risk_level,
+        ttl_hours=request.ttl_hours,
+        source="manual",
+        enforce=True
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to blacklist IP")
+    return {"message": f"IP {ip} blacklisted"}
+
+
+@app.post("/api/retrain")
+async def trigger_retrain():
+    """Trigger emergency model retraining."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('feedback_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or FeedbackManager not available")
+
+    success = daemon._components['feedback_manager'].trigger_retrain()
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to trigger retraining")
+    return {"message": "Retraining triggered"}
+
+
+@app.get("/api/status")
+async def get_status():
+    """Get daemon health status."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon:
+        raise HTTPException(status_code=503, detail="Daemon not available")
+    return daemon.get_health_status()
+
+
+@app.get("/api/metrics")
+async def get_metrics():
+    """Get live telemetry data."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon:
+        raise HTTPException(status_code=503, detail="Daemon not available")
+
+    # Combine daemon stats and component stats
+    stats = daemon._stats.copy()
+
+    # Add prediction stats if available
+    prediction_engine = daemon._components.get('prediction_engine')
+    if prediction_engine:
+        stats['prediction_engine'] = prediction_engine.get_statistics()
+
+    return stats
+
+
+@app.get("/api/blacklist")
+async def get_blacklist(active_only: bool = True, limit: int = 15):
+    """Get list of blacklisted IPs."""
+    daemon = getattr(app.state, "daemon", None)
+    if not daemon or not daemon._components.get('blacklist_manager'):
+        raise HTTPException(status_code=503, detail="Daemon or BlacklistManager not available")
+
+    entries = daemon._components['blacklist_manager'].get_blacklist_entries(
+        active_only=active_only,
+        limit=limit
+    )
+    return list(entries)
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for live updates."""
+    await websocket.accept()
+    daemon = getattr(app.state, "daemon", None)
+    try:
+        while True:
+            if daemon:
+                # Gather data
+                prediction_engine = daemon._components.get('prediction_engine')
+                pe_stats = prediction_engine.get_statistics() if prediction_engine else {}
+
+                # Try to get active blocks count
+                blacklist_manager = daemon._components.get('blacklist_manager')
+                active_blocks = blacklist_manager._stats.get('active_entries', 0) if blacklist_manager else 0
+
+                data = {
+                    "health": daemon.get_health_status(),
+                    "stats": daemon._stats,
+                    "prediction_stats": pe_stats,
+                    "active_blocks": active_blocks,
+                    "timestamp": datetime.now().isoformat()
+                }
+                await websocket.send_json(data)
+            else:
+                await websocket.send_json({"error": "Daemon not ready"})
+
+            await asyncio.sleep(1)  # Update every second
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
 
 
 class AegisDaemonError(Exception):
@@ -96,6 +231,7 @@ class AegisDaemon:
         self._running = False
         self._shutdown_event = threading.Event()
         self._start_time = None
+        self._api_server = None  # Uvicorn server instance
         self._components = {
             'anonymizer': None,
             'model_manager': None,
@@ -369,6 +505,22 @@ class AegisDaemon:
                 self._start_time = datetime.now()
                 self._stats['service_start_time'] = self._start_time.isoformat()
 
+                # Start API Server
+                try:
+                    app.state.daemon = self
+                    config = uvicorn.Config(app, host="127.0.0.1", port=8081, log_level="info", loop="asyncio")
+                    self._api_server = uvicorn.Server(config)
+
+                    api_thread = threading.Thread(
+                        target=self._api_server.run,
+                        name="Aegis-API",
+                        daemon=True
+                    )
+                    api_thread.start()
+                    log_event(logger, "api_server_started", port=8081)
+                except Exception as e:
+                    log_event(logger, "api_server_start_failed", level="error", error=str(e))
+
                 # Start background monitoring thread
                 monitor_thread = threading.Thread(
                     target=self._monitoring_loop,
@@ -436,6 +588,14 @@ class AegisDaemon:
             self._shutdown_event.set()
             
             shutdown_errors = []
+
+            # Stop API server
+            try:
+                if self._api_server:
+                    self._api_server.should_exit = True
+                    log_event(logger, "api_server_stopping")
+            except Exception as e:
+                log_event(logger, "api_server_stop_failed", level="warning", error=str(e))
 
             # Stop prediction engine
             try:
