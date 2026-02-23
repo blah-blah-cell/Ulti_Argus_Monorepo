@@ -34,6 +34,84 @@ This repository hosts the **Ulti_Argus ecosystem**, a privacy-first, AI-powered 
     *   **Enforcement (Aegis)**: Autonomous zero-latency blocking directly in the eBPF kernel `BLOCKLIST` map via `KronosEnforcer` (`bpftool`), with `iptables` as a structural fallback.
 *   **Orchestration**: `install.sh` acts as the root orchestrator, automatically building DeepPacketSentinel, setting up Python environments, executing `train_models.py`, and initializing the `argus-sentinel` and `argus-brain` systemd services.
 
+### 4-Layer Pipeline Architecture
+
+```mermaid
+graph TD
+    subgraph Data Plane
+        DPS[DeepPacketSentinel\n(Rust/eBPF)]
+        XDP[XDP Filter]
+    end
+
+    subgraph Meta-Router
+        Kronos[Kronos Router\n(Python)]
+        IPC[Unix Domain Socket]
+    end
+
+    subgraph Anomaly Score
+        IF[Isolation Forest\n(Scikit-Learn)]
+        PE[Prediction Engine]
+    end
+
+    subgraph Deep Inspection
+        CNN[Payload Classifier\n(PyTorch)]
+        Mnemosyne[Mnemosyne]
+    end
+
+    XDP --> DPS
+    DPS --> IPC
+    IPC --> Kronos
+    Kronos -->|Triage| PE
+    PE --> IF
+    PE -->|Escalate| Mnemosyne
+    Mnemosyne --> CNN
+```
+
+### IPC Communication Flow
+
+```mermaid
+sequenceDiagram
+    participant DPS as Rust (Data Plane)
+    participant Socket as Unix Socket
+    participant Listener as Python (IPCListener)
+    participant Router as Kronos Router
+
+    DPS->>DPS: Capture & Parse Packet
+    DPS->>DPS: Extract Metadata
+    DPS->>Socket: Send JSON/MsgPack Frame
+    Socket->>Listener: Receive Frame
+    Listener->>Router: Forward FlowFrame
+    Router->>Router: Analyze & Route
+```
+
+### Enforcement Feedback Loop
+
+```mermaid
+graph LR
+    subgraph Detection
+        PE[Prediction Engine]
+        Model[AI Models]
+    end
+
+    subgraph Decision
+        BLM[Blacklist Manager]
+        KE[Kronos Enforcer]
+    end
+
+    subgraph Enforcement
+        BPF[bpftool]
+        Map[eBPF Map (Kernel)]
+        XDP[XDP Program]
+    end
+
+    PE -->|Anomaly Detected| BLM
+    BLM -->|Block IP| KE
+    KE -->|Update Map| BPF
+    BPF -->|Write| Map
+    XDP -->|Read| Map
+    XDP -->|Drop| Packet
+```
+
 ---
 
 ## 📂 Directory Structure
