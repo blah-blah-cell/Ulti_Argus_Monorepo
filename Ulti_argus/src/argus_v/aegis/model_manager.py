@@ -23,7 +23,6 @@ except ImportError:
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
 
 from ..oracle_core.logging import log_event
 
@@ -342,8 +341,20 @@ class ModelManager:
             mock_model = IsolationForest(random_state=42)
             mock_model.fit(np.random.randn(100, n_features))
 
-            mock_scaler = StandardScaler()
-            mock_scaler.fit(np.random.randn(100, n_features))
+            class MockScaler:
+                mean_ = np.zeros(n_features)
+                scale_ = np.ones(n_features)
+
+                def transform(self, X):
+                    return X
+
+                def fit_transform(self, X):
+                    return X
+
+                def inverse_transform(self, X):
+                    return X
+
+            mock_scaler = MockScaler()
             
             with open(local_model_path, 'wb') as f:
                 pickle.dump(mock_model, f)
@@ -683,66 +694,6 @@ class ModelManager:
             )
             return False
     
-    def hot_load_model(self, model_path: str, scaler_path: str) -> bool:
-        """Hot swap the model and scaler from the provided paths.
-
-        Args:
-            model_path: Path to the new model file.
-            scaler_path: Path to the new scaler file.
-
-        Returns:
-            True if model loaded successfully, False otherwise.
-        """
-        try:
-            log_event(
-                logger,
-                "hot_load_model_attempted",
-                level="info",
-                model_path=model_path,
-                scaler_path=scaler_path
-            )
-
-            local_paths = {
-                'model': model_path,
-                'scaler': scaler_path
-            }
-
-            # Attempt to load and validate
-            if self._load_and_validate_model(local_paths):
-                # Update metadata if possible, or mark as manually loaded
-                self._model_metadata = {
-                    'name': Path(model_path).name,
-                    'timestamp': datetime.now().strftime("%Y%m%d_%H%M%S"),
-                    'type': 'hot_swap'
-                }
-                self._last_load_time = datetime.now()
-                self._load_failures = 0
-
-                log_event(
-                    logger,
-                    "hot_load_model_success",
-                    level="info",
-                    model_path=model_path
-                )
-                return True
-            else:
-                log_event(
-                    logger,
-                    "hot_load_model_validation_failed",
-                    level="error",
-                    model_path=model_path
-                )
-                return False
-
-        except Exception as e:
-            log_event(
-                logger,
-                "hot_load_model_failed",
-                level="error",
-                error=str(e)
-            )
-            return False
-
     def is_model_available(self) -> bool:
         """Check if a valid model is currently loaded.
         
@@ -833,16 +784,16 @@ class ModelManager:
             # Select and prepare features
             features_df = flows_df[required_cols].copy()
 
-            # Handle categorical features first
+            # Convert to numeric, replacing non-numeric values with 0
+            for col in features_df.columns:
+                features_df[col] = pd.to_numeric(features_df[col], errors='coerce').fillna(0)
+
+            # Handle categorical features
             if 'protocol' in features_df.columns:
                 # Convert protocol to numeric (TCP=1, UDP=2, ICMP=3, etc.)
                 protocol_map = {'TCP': 1, 'UDP': 2, 'ICMP': 3, 'OTHER': 0}
                 features_df['protocol'] = features_df['protocol'].map(protocol_map).fillna(0)
             
-            # Convert to numeric, replacing non-numeric values with 0
-            for col in features_df.columns:
-                features_df[col] = pd.to_numeric(features_df[col], errors='coerce').fillna(0)
-
             return features_df
             
         except Exception as e:

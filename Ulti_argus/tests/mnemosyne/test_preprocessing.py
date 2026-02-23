@@ -135,7 +135,7 @@ class TestFlowPreprocessor:
     def test_detect_feature_outliers(self, preprocessing_config, sample_flow_df):
         """Test outlier detection and removal."""
         preprocessor = FlowPreprocessor(preprocessing_config)
-        features_df = preprocessor.prepare_features(sample_flow_df)
+        preprocessor.prepare_features(sample_flow_df)
         
         # Add some outlier data
         outlier_data = sample_flow_df.copy()

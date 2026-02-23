@@ -484,7 +484,7 @@ class TestPredictionEngine:
         # The mock would track whether enforce=True was passed
         blacklist_calls = self.mock_blacklist_manager.add_to_blacklist.call_args_list
         if blacklist_calls:
-            enforce_param = blacklist_calls[0][1].get('enforce', False)
+            blacklist_calls[0][1].get('enforce', False)
             # Should be False in dry run mode
             # (Implementation depends on how dry run is handled)
     
@@ -506,7 +506,7 @@ class TestPredictionEngine:
         assert not success
         
         # Verify error statistics
-        stats = self.prediction_engine.get_statistics()
+        self.prediction_engine.get_statistics()
         # Should have attempted processing
     
     def test_performance_and_scaling(self):

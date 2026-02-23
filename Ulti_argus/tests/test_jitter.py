@@ -1,12 +1,14 @@
-import sys
 import os
+import sys
+
 # Ensure src is in path so we can import modules when running directly
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
 
 import unittest
 import unittest.mock
-from src.argus_plugins.jitter_hunter import JitterHunter
-import statistics
+
+from argus_v.plugins.jitter_hunter import JitterHunter
+
 
 class TestJitterHunter(unittest.TestCase):
     def setUp(self):

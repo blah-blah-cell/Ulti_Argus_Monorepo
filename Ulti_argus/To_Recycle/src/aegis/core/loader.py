@@ -1,10 +1,10 @@
 import argparse
-from bcc import BPF
-import time
+import os
 import socket
 import struct
 import sys
-import os
+
+from bcc import BPF
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))

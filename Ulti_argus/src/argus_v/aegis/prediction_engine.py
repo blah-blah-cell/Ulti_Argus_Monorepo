@@ -24,8 +24,6 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from threading import Lock
-
 from ..oracle_core.logging import log_event
 from .blacklist_manager import BlacklistManager
 from .model_manager import ModelLoadError, ModelManager
@@ -114,8 +112,6 @@ class PredictionEngine:
         self._ipc_thread = None
         self._csv_queue = Queue()
         self._processed_files = set()
-        self._model_lock = Lock()
-        self.borderline_events_queue = Queue()
         
         # Statistics
         self._stats = {
@@ -468,10 +464,9 @@ class PredictionEngine:
                 
                 # Dynamic prediction
                 try:
-                    with self._model_lock:
-                        if not self.model_manager.is_model_available():
-                            if not self.model_manager.load_latest_model():
-                                continue
+                    if not self.model_manager.is_model_available():
+                        if not self.model_manager.load_latest_model():
+                            continue
 
                     with self._model_lock:
                         start_pred = time.time()
@@ -885,24 +880,6 @@ class PredictionEngine:
                     anomaly_score = row.get('anomaly_score', 0)
                     risk_level = row.get('risk_level', 'low')
 
-                    # Online Learning: Collect borderline events (0.4 <= score <= 0.6)
-                    # Use absolute value as per ModelManager logic
-                    abs_score = abs(float(anomaly_score))
-                    if 0.4 <= abs_score <= 0.6:
-                        try:
-                            # Extract features
-                            features = {}
-                            for col in self.model_manager.feature_columns:
-                                features[col] = row.get(col, 0)
-
-                            self.borderline_events_queue.put({
-                                'features': features,
-                                'score': float(anomaly_score),
-                                'timestamp': datetime.now().isoformat()
-                            })
-                        except Exception as ol_err:
-                            log_event(logger, "online_learning_collection_failed", error=str(ol_err))
-
                     # Check for trusted IPs (Immediate Relief)
                     src_ip = row.get('src_ip', '')
                     dst_ip = row.get('dst_ip', '')
@@ -1185,44 +1162,4 @@ class PredictionEngine:
                 file_path=str(csv_file),
                 error=str(e)
             )
-            return False
-
-    def hot_swap_model(self, new_model_path: str) -> bool:
-        """Atomically hot-swap the active model with a new one.
-
-        Args:
-            new_model_path: Path to the new model file.
-
-        Returns:
-            True if swap successful, False otherwise.
-        """
-        try:
-            # Infer scaler path (assume it's in the same directory with 'scaler' instead of 'model')
-            # Example: /path/to/model_2023.pkl -> /path/to/scaler_2023.pkl
-            # Or just assume simple replacement "model" -> "scaler"
-            scaler_path = new_model_path.replace("model", "scaler")
-            if scaler_path == new_model_path:
-                # If no "model" in name, try prepending "scaler_" to filename?
-                # Let's stick to replacement as it's the standard convention in Aegis
-                pass
-
-            log_event(
-                logger,
-                "hot_swap_initiated",
-                level="info",
-                model_path=new_model_path
-            )
-
-            with self._model_lock:
-                success = self.model_manager.hot_load_model(new_model_path, scaler_path)
-
-            if success:
-                log_event(logger, "hot_swap_completed", level="info")
-                return True
-            else:
-                log_event(logger, "hot_swap_failed", level="error")
-                return False
-
-        except Exception as e:
-            log_event(logger, "hot_swap_exception", level="error", error=str(e))
             return False

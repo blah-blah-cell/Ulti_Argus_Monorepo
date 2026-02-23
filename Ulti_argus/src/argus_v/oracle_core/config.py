@@ -18,7 +18,6 @@ from .validation import (
     get_required,
     require_non_empty_str,
     require_positive_int,
-    require_safe_name,
 )
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")

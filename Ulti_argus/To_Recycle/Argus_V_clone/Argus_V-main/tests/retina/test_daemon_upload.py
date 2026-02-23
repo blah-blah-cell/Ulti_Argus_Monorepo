@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from argus_v.oracle_core.anonymize import AnonymizationConfig
 from argus_v.retina.config import (
     AggregationConfig,
     CaptureConfig,
@@ -15,7 +15,6 @@ from argus_v.retina.config import (
     RetinaConfig,
 )
 from argus_v.retina.daemon import RetinaDaemon
-from argus_v.oracle_core.anonymize import AnonymizationConfig
 
 
 class TestDaemonUpload:

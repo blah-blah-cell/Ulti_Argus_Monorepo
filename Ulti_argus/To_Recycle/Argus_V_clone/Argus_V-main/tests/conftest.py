@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import sys
 import os
+import sys
 import tempfile
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 def pytest_configure() -> None:

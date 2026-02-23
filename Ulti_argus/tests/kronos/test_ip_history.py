@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import sys
 from unittest.mock import MagicMock
 
@@ -11,10 +12,10 @@ sys.modules["sklearn.preprocessing"] = MagicMock()
 sys.modules["skops"] = MagicMock()
 sys.modules["skops.io"] = MagicMock()
 
-import time
-from pathlib import Path
-import pytest
-from argus_v.kronos.ip_history import IPHistoryStore, IPRecord
+import time  # noqa: E402
+
+from argus_v.kronos.ip_history import IPHistoryStore, IPRecord  # noqa: E402
+
 
 def test_ip_record_basics():
     record = IPRecord()
@@ -149,7 +150,7 @@ def test_ip_history_store_load_fail(tmp_path, caplog):
     corrupt_path = tmp_path / "corrupt.pkl"
     corrupt_path.write_text("not a pickle")
 
-    store = IPHistoryStore(persist_path=str(corrupt_path))
+    _ = IPHistoryStore(persist_path=str(corrupt_path))
 
     assert "ip_history_load_failed" in caplog.text
 

@@ -1,7 +1,8 @@
-from src.argus_plugins.manager import ArgusPlugin
 import logging
 import statistics
-import time
+
+from src.argus_plugins.manager import ArgusPlugin
+
 
 class JitterHunter(ArgusPlugin):
     def name(self):

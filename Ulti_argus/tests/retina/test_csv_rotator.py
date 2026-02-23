@@ -132,7 +132,7 @@ class TestMythologicalCSVRotator:
         }]
         
         # Write enough data to trigger rotation (5 rows max)
-        for i in range(6):  # One more than max_rows_per_file
+        for _i in range(6):  # One more than max_rows_per_file
             self.rotator.write_window_stats(window_stats, flow_data)
         
         # Should have 2 files now

@@ -1,12 +1,9 @@
 
-import pytest
-from unittest.mock import MagicMock, patch, mock_open
-import sys
-import os
 import signal
-import json
-from pathlib import Path
-from contextlib import contextmanager
+import sys
+from unittest.mock import MagicMock, mock_open, patch
+
+import pytest
 
 # Mock dependencies
 mock_yaml = MagicMock()
@@ -44,7 +41,8 @@ mock_oracle_logging = MagicMock()
 sys.modules['argus_v.oracle_core.logging'] = mock_oracle_logging
 
 # Now import the module under test
-from argus_v.aegis.cli import AegisCLI, main
+from argus_v.aegis.cli import AegisCLI
+
 
 class TestAegisCLI:
 
@@ -190,7 +188,7 @@ class TestAegisCLI:
         daemon_instance.get_status.return_value = {'status': 'ok'}
         mock_load_daemon.return_value = daemon_instance
 
-        with patch('sys.stdout') as mock_stdout:
+        with patch('sys.stdout'):
             exit_code = cli._cmd_status(mock_args)
             assert exit_code == 0
             daemon_instance.get_status.assert_called()
@@ -202,7 +200,7 @@ class TestAegisCLI:
         daemon_instance.get_health_status.return_value = {'health': 'ok'}
         mock_load_daemon.return_value = daemon_instance
 
-        with patch('sys.stdout') as mock_stdout:
+        with patch('sys.stdout'):
             exit_code = cli._cmd_health(mock_args)
             assert exit_code == 0
             daemon_instance.get_health_status.assert_called()

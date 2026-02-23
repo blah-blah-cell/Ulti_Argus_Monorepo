@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from ..oracle_core.logging import configure_logging, log_event, JsonFormatter, PrivacyFilter
+from ..oracle_core.logging import JsonFormatter, PrivacyFilter, configure_logging, log_event
 from .config import RetinaConfig
 from .daemon import RetinaDaemon
 

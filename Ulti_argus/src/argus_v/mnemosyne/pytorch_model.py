@@ -85,6 +85,7 @@ class _Encoder(nn.Module):
 #  Autoencoder (unsupervised anomaly scoring)
 # ──────────────────────────────────────────────────────────────────────────
 
+
 class PayloadAutoencoder(nn.Module):
     """Conv autoencoder for payload anomaly detection.
 

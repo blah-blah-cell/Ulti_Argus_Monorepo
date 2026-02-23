@@ -245,7 +245,9 @@ class KronosTrainer:
         try:
             from sklearn.ensemble import HistGradientBoostingClassifier
         except ImportError:
-            from sklearn.ensemble import GradientBoostingClassifier as HistGradientBoostingClassifier
+            from sklearn.ensemble import (
+                GradientBoostingClassifier as HistGradientBoostingClassifier,
+            )
 
         model = HistGradientBoostingClassifier(
             max_iter=self.n_estimators,

@@ -1,13 +1,12 @@
-import sys
 import os
-import torch
+import sys
 
 # Ensure src is in path (Two levels up if in tests/ subdir, but let's be robust)
 # d:\Argus_AI\tests\test_integration.py -> dirname = d:\Argus_AI\tests -> .. = d:\Argus_AI
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
 
-from src.mnemosyne.inference import analyze_payload
-from src.mnemosyne.model import create_model
+from argus_v.mnemosyne.inference import analyze_payload
+
 
 def test_integration():
     print("TEST: Initializing Neural Engine...")
