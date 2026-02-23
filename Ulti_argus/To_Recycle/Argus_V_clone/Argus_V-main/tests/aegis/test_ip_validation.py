@@ -1,6 +1,7 @@
-import pytest
-from unittest.mock import MagicMock
 import sys
+from unittest.mock import MagicMock
+
+import pytest
 
 # Mock missing dependencies
 sys.modules['yaml'] = MagicMock()
@@ -16,6 +17,7 @@ sys.modules['joblib'] = MagicMock()
 sys.modules['skops'] = MagicMock()
 
 from argus_v.aegis.blacklist_manager import BlacklistManager
+
 
 @pytest.fixture
 def blacklist_manager():

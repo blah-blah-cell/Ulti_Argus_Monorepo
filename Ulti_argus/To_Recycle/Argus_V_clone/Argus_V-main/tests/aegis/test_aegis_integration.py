@@ -8,7 +8,6 @@ import json
 import tempfile
 import time
 from pathlib import Path
-import sys
 
 import pytest
 
@@ -428,7 +427,6 @@ class TestFirebaseSyncIntegration:
     
     def test_blacklist_export_to_json(self):
         """Test blacklist export to JSON format."""
-        from argus_v.aegis.blacklist_manager import BlacklistManager
         from argus_v.oracle_core.anonymize import HashAnonymizer
         
         anonymizer = HashAnonymizer(salt="test-export")

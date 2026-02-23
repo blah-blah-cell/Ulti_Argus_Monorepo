@@ -1,7 +1,9 @@
-from src.argus_plugins.manager import ArgusPlugin
 import logging
 import random
 import time
+
+from src.argus_plugins.manager import ArgusPlugin
+
 
 class ChimeraDeception(ArgusPlugin):
     """

@@ -1,11 +1,12 @@
-import torch
-import numpy as np
 import os
 import sys
+
+import torch
 
 # Ensure proper import path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
 from src.mnemosyne.model import create_model
+
 
 class InferenceEngine:
     def __init__(self, model_path="d:/Argus_AI/models/payload_classifier.pth"):

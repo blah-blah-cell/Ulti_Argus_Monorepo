@@ -1,12 +1,20 @@
-import pytest
-from unittest.mock import patch, MagicMock
+import json
+import socket
+import urllib.error
+import urllib.request
 from datetime import date, timedelta
 from hashlib import sha256
-import json
-import urllib.request
-import urllib.error
-import socket
-from argus_v.licensing.verify import verify_license_file, LicenseStatus, _canonical_payload, NoRedirectHandler
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from argus_v.licensing.verify import (
+    LicenseStatus,
+    NoRedirectHandler,
+    _canonical_payload,
+    verify_license_file,
+)
+
 
 def generate_payload(url="https://localhost:8080/verify"):
     expires = (date.today() + timedelta(days=30)).isoformat()

@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.argus_v.aegis.model_manager import ModelManager
+from argus_v.aegis.model_manager import ModelManager
 
 
 class MockScaler:

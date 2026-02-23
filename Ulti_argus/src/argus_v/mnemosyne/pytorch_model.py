@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+
 class PayloadAutoencoder(nn.Module):
     def __init__(self, input_len=1024, latent_dim=64):
         super(PayloadAutoencoder, self).__init__()

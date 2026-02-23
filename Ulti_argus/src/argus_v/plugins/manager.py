@@ -1,7 +1,7 @@
 import importlib
+import logging
 import os
 import sys
-import logging
 from abc import ABC, abstractmethod
 
 # Ensure src is in path to import siblings

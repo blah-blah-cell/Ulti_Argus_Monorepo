@@ -1,7 +1,7 @@
-import paramiko
 import os
-import sys
 import tarfile
+
+import paramiko
 from scp import SCPClient
 
 # Credits

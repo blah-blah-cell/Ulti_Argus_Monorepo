@@ -1,7 +1,8 @@
-import scapy.all as scapy
 import argparse
-import sys
 import os
+
+import scapy.all as scapy
+
 
 def scan(ip):
     print(f"[*] Probing network range: {ip}")

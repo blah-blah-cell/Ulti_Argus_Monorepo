@@ -1,7 +1,8 @@
-import pytest
-from unittest.mock import MagicMock, patch
-import sys
 import os
+import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Add the src directory to sys.path
 sys.path.append(os.path.join(os.getcwd(), "Ulti_argus/src"))
@@ -29,9 +30,10 @@ mocks = [
 for module in mocks:
     sys.modules[module] = MagicMock()
 
-from argus_v.oracle_core.validation import require_safe_name, ValidationError
-from argus_v.aegis.config import EnforcementConfig
 from argus_v.aegis.blacklist_manager import BlacklistManager
+from argus_v.aegis.config import EnforcementConfig
+from argus_v.oracle_core.validation import ValidationError, require_safe_name
+
 
 class TestIptablesSecurity:
     """Security tests for iptables configuration validation."""

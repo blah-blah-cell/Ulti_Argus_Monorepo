@@ -16,7 +16,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 try:
     import firebase_admin
@@ -33,7 +33,6 @@ except ImportError:
     _KRONOS_AVAILABLE = False
 
 from ..oracle_core import HashAnonymizer
-from ..oracle_core.config import require_safe_name
 from ..oracle_core.logging import log_event
 
 logger = logging.getLogger(__name__)

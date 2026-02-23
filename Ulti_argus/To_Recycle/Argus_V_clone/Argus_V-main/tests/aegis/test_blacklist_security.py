@@ -1,9 +1,11 @@
 import os
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 from argus_v.aegis.blacklist_manager import BlacklistManager
 from argus_v.aegis.config import EnforcementConfig, ValidationError
-from argus_v.oracle_core.anonymize import HashAnonymizer
+
 
 class TestBlacklistSecurity:
     """Security tests for BlacklistManager."""

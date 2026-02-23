@@ -6,8 +6,6 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # Add src to path if needed
 root = Path(__file__).resolve().parents[2]
 src = root / "src"

@@ -1,8 +1,8 @@
 import argparse
 import logging
-from pathlib import Path
-import pytest
+
 from argus_v.retina.cli import configure_logging_from_args
+
 
 def test_configure_logging_with_file(tmp_path):
     log_file = tmp_path / "test.log"

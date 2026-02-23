@@ -7,23 +7,21 @@ in Ulti_argus/src/argus_v/aegis/prediction_engine.py.
 import threading
 import time
 from datetime import datetime
-from pathlib import Path
-from queue import Queue, Empty
-from unittest.mock import Mock, MagicMock, patch, ANY
+from queue import Queue
+from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
 
-from argus_v.aegis.prediction_engine import (
-    PredictionEngine,
-    PredictionEngineError,
-    CSVPollingError,
-    PredictionTimeoutError,
-)
+from argus_v.aegis.blacklist_manager import BlacklistManager
 from argus_v.aegis.config import PollingConfig, PredictionConfig
 from argus_v.aegis.model_manager import ModelManager
-from argus_v.aegis.blacklist_manager import BlacklistManager
-from argus_v.kronos.router import KronosRouter, RoutingPath, KronosDecision
+from argus_v.aegis.prediction_engine import (
+    CSVPollingError,
+    PredictionEngine,
+)
+from argus_v.kronos.router import KronosDecision, KronosRouter, RoutingPath
+
 
 class TestPredictionEngineUnit:
     """Unit tests for PredictionEngine class."""

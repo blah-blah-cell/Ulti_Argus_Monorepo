@@ -1,12 +1,11 @@
-import pytest
-import os
 import json
-import logging
-import time
 from unittest.mock import MagicMock, patch
-from pathlib import Path
-from argus_v.aegis.daemon import AegisDaemon, ServiceStartError
+
+import pytest
+
 from argus_v.aegis.config import AegisConfig
+from argus_v.aegis.daemon import AegisDaemon, ServiceStartError
+
 
 class TestDaemonErrorHandling:
 

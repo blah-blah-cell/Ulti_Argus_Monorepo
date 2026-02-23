@@ -1,19 +1,16 @@
 
-import pytest
-import time
-from unittest.mock import MagicMock, patch
-import sys
 
 # Mock scapy before importing collector if it's not available
 # But in this environment we have scapy installed.
 
-from argus_v.retina.collector import CaptureEngine, PacketInfo
+from argus_v.retina.collector import CaptureEngine
+
 
 class TestCaptureEngineUnit:
     def test_convert_scapy_packet_tcp(self):
         """Test converting a TCP packet."""
-        from scapy.layers.l2 import Ether
         from scapy.layers.inet import IP, TCP
+        from scapy.layers.l2 import Ether
 
         # Create a real scapy packet
         packet = Ether() / IP(src="192.168.1.1", dst="192.168.1.2", proto=6) / TCP(sport=1234, dport=80)
@@ -33,8 +30,8 @@ class TestCaptureEngineUnit:
 
     def test_convert_scapy_packet_udp(self):
         """Test converting a UDP packet."""
-        from scapy.layers.l2 import Ether
         from scapy.layers.inet import IP, UDP
+        from scapy.layers.l2 import Ether
 
         packet = Ether() / IP(src="10.0.0.1", dst="10.0.0.2", proto=17) / UDP(sport=53, dport=5353)
 
@@ -49,8 +46,8 @@ class TestCaptureEngineUnit:
 
     def test_convert_scapy_packet_icmp(self):
         """Test converting an ICMP packet."""
+        from scapy.layers.inet import ICMP, IP
         from scapy.layers.l2 import Ether
-        from scapy.layers.inet import IP, ICMP
 
         packet = Ether() / IP(src="10.0.0.1", dst="10.0.0.2") / ICMP()
 
@@ -65,9 +62,9 @@ class TestCaptureEngineUnit:
 
     def test_convert_scapy_packet_ipv6(self):
         """Test converting an IPv6 packet."""
-        from scapy.layers.l2 import Ether
-        from scapy.layers.inet6 import IPv6
         from scapy.layers.inet import TCP
+        from scapy.layers.inet6 import IPv6
+        from scapy.layers.l2 import Ether
 
         packet = Ether() / IPv6(src="fe80::1", dst="fe80::2") / TCP(sport=8080, dport=80)
 

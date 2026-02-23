@@ -1,10 +1,11 @@
-import os
 import datetime
+import os
+
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization
 from cryptography.x509.oid import NameOID
+
 
 class CertificateAuthority:
     def __init__(self, cert_dir="certs"):

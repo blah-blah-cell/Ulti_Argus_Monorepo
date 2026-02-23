@@ -1,12 +1,9 @@
 
-import pytest
-from unittest.mock import MagicMock, patch, mock_open
-import sys
-import os
 import signal
-import json
-from pathlib import Path
-from contextlib import contextmanager
+import sys
+from unittest.mock import MagicMock, mock_open, patch
+
+import pytest
 
 # Mock dependencies
 mock_yaml = MagicMock()
@@ -44,7 +41,8 @@ mock_oracle_logging = MagicMock()
 sys.modules['argus_v.oracle_core.logging'] = mock_oracle_logging
 
 # Now import the module under test
-from argus_v.aegis.cli import AegisCLI, main
+from argus_v.aegis.cli import AegisCLI
+
 
 class TestAegisCLI:
 

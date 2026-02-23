@@ -1,5 +1,6 @@
 import sys
 from unittest.mock import MagicMock
+
 sys.modules["yaml"] = MagicMock()
 sys.modules["numpy"] = MagicMock()
 sys.modules["pandas"] = MagicMock()
@@ -9,14 +10,15 @@ sys.modules["torch"] = MagicMock()
 sys.modules["torchvision"] = MagicMock()
 sys.modules["joblib"] = MagicMock()
 
-import time
-import sqlite3
 import shutil
+import sqlite3
 import tempfile
-import threading
+import time
 from pathlib import Path
+
 from argus_v.aegis.blacklist_manager import BlacklistManager
 from argus_v.oracle_core.anonymize import HashAnonymizer
+
 
 class MockConfig:
     def __init__(self, temp_dir):

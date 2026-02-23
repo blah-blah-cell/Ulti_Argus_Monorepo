@@ -1,6 +1,5 @@
 """Unit tests for mnemosyne trainer module."""
 
-import pickle
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -265,10 +264,10 @@ class TestIsolationForestTrainer:
         
         # This should trigger a size warning
         with patch('argus_v.mnemosyne.trainer.log_event') as mock_log:
-            artifact_paths = trainer.serialize_model(str(tmp_path), scaler)
+            trainer.serialize_model(str(tmp_path), scaler)
             
             # Check if size warning was logged
-            size_warning_logged = any(
+            any(
                 'model_size_warning' in str(call) for call in mock_log.call_args_list
             )
             # Note: This might not always trigger depending on actual model size
