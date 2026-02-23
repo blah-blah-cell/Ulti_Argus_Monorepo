@@ -1,12 +1,11 @@
-import pytest
-import os
 import json
-import logging
-import time
 from unittest.mock import MagicMock, patch
-from pathlib import Path
-from argus_v.aegis.daemon import AegisDaemon, ServiceStartError
+
+import pytest
+
 from argus_v.aegis.config import AegisConfig
+from argus_v.aegis.daemon import AegisDaemon, ServiceStartError
+
 
 class TestDaemonErrorHandling:
 
@@ -162,5 +161,5 @@ class TestDaemonErrorHandling:
         # Check that we got a result, not an exception
         assert status['overall_health'] != 'error'
         assert 'model_manager' in status['component_details']
-        assert status['component_details']['model_manager']['healthy'] == False
+        assert not status['component_details']['model_manager']['healthy']
         assert "Component dead" in str(status['component_details']['model_manager'].get('error', ''))

@@ -1,12 +1,11 @@
-import sys
-import json
-import logging
 import sqlite3
-import subprocess
-import pytest
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch, ANY
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 
 # Helper to mock dependencies if they are missing
 def mock_if_missing(name, setup_func=None):
@@ -59,10 +58,8 @@ mock_if_missing('google.cloud.storage')
 # Now safe to import BlacklistManager
 from argus_v.aegis.blacklist_manager import (
     BlacklistManager,
-    BlacklistValidationError,
-    BlacklistNotFoundError,
 )
-from argus_v.oracle_core import HashAnonymizer
+
 
 # Register adapters for sqlite3 to handle datetime if needed
 def adapt_datetime(dt):

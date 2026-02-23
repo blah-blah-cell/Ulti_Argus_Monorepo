@@ -76,7 +76,7 @@ class TestArtifactManager:
         mock_bucket = Mock()
         mock_storage.bucket.return_value = mock_bucket
         
-        manager = ArtifactManager(artifact_config)
+        ArtifactManager(artifact_config)
         
         # Verify Firebase was initialized correctly
         mock_firebase_admin.credentials.Certificate.assert_called_once_with("/fake/path/service-account.json")

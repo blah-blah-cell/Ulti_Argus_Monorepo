@@ -1,16 +1,15 @@
-from mitmproxy import http
-from mitmproxy import ctx
-import logging
-import sys
 import os
-import requests
+import sys
 import threading
+
+import requests
+from mitmproxy import ctx, http
 
 # Ensure src is in path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
 
+from src.argus_plugins.manager import plugin_manager
 from src.mnemosyne.inference import analyze_payload
-from src.argus_plugins.manager import plugin_manager 
 
 ANOMALY_THRESHOLD = 0.5 
 
@@ -25,7 +24,7 @@ def report_to_dashboard(method, host, path, score, plugin_alerts):
             }
             # Use a slightly longer timeout for the background thread
             requests.post("http://127.0.0.1:8000/ingest", json=payload, timeout=2.0)
-        except Exception as e:
+        except Exception:
             # Silently fail in background to avoid spamming proxy logs
             pass
             

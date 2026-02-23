@@ -6,15 +6,13 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # Add src to path if needed
 root = Path(__file__).resolve().parents[2]
 src = root / "src"
 if str(src) not in sys.path:
     sys.path.insert(0, str(src))
 
-from argus_v.hermes.uploader import FirebaseUploader
+from argus_v.hermes.uploader import FirebaseUploader  # noqa: E402
 
 
 class TestFirebaseUploader:
@@ -45,7 +43,7 @@ class TestFirebaseUploader:
         """Test initialization with credentials file."""
         mock_firebase.get_app.side_effect = ValueError
 
-        uploader = FirebaseUploader(
+        _ = FirebaseUploader(
             bucket_name="test-bucket",
             credentials_path="/path/to/creds.json"
         )
@@ -60,7 +58,7 @@ class TestFirebaseUploader:
         # Mock app already exists (no ValueError)
         mock_firebase.get_app.return_value = MagicMock()
 
-        uploader = FirebaseUploader(bucket_name="test-bucket")
+        _ = FirebaseUploader(bucket_name="test-bucket")
 
         # Should not call initialize_app
         mock_firebase.initialize_app.assert_not_called()

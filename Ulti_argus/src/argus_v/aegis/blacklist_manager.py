@@ -35,7 +35,6 @@ except ImportError:
     _KRONOS_AVAILABLE = False
 
 from ..oracle_core import HashAnonymizer
-from ..oracle_core.config import require_safe_name
 from ..oracle_core.logging import log_event
 
 logger = logging.getLogger(__name__)

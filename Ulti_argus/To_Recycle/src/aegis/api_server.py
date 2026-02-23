@@ -1,18 +1,19 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 import os
-import json
-import time
 import random
-from typing import List, Dict
 
 # Standard ARGUS imports
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
-from src.mnemosyne.inference import engine
-from src.argus_plugins.manager import plugin_manager
+import time
+from typing import Dict
 
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from collections import deque
+
+from src.argus_plugins.manager import plugin_manager
+from src.mnemosyne.inference import engine
 
 app = FastAPI(title="ARGUS Neural API")
 

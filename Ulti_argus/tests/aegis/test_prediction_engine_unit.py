@@ -7,23 +7,21 @@ in Ulti_argus/src/argus_v/aegis/prediction_engine.py.
 import threading
 import time
 from datetime import datetime
-from pathlib import Path
-from queue import Queue, Empty
-from unittest.mock import Mock, MagicMock, patch, ANY
+from queue import Queue
+from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
 
-from argus_v.aegis.prediction_engine import (
-    PredictionEngine,
-    PredictionEngineError,
-    CSVPollingError,
-    PredictionTimeoutError,
-)
+from argus_v.aegis.blacklist_manager import BlacklistManager
 from argus_v.aegis.config import PollingConfig, PredictionConfig
 from argus_v.aegis.model_manager import ModelManager
-from argus_v.aegis.blacklist_manager import BlacklistManager
-from argus_v.kronos.router import KronosRouter, RoutingPath, KronosDecision
+from argus_v.aegis.prediction_engine import (
+    CSVPollingError,
+    PredictionEngine,
+)
+from argus_v.kronos.router import KronosDecision, KronosRouter, RoutingPath
+
 
 class TestPredictionEngineUnit:
     """Unit tests for PredictionEngine class."""
@@ -508,7 +506,7 @@ class TestPredictionEngineUnit:
         self.kronos_router.route.return_value = KronosDecision(path=RoutingPath.ESCALATE, confidence=0.5, if_score=0.4)
 
         # Mock analyze_payload to return high score. Use create=True.
-        with patch('argus_v.aegis.prediction_engine.analyze_payload', return_value=0.8, create=True) as mock_cnn:
+        with patch('argus_v.aegis.prediction_engine.analyze_payload', return_value=0.8, create=True):
             self.engine._process_batch_predictions(predictions_df)
 
             # Should force anomaly (-1) and trigger enforcement

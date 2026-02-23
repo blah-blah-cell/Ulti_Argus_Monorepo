@@ -8,7 +8,6 @@ import json
 import tempfile
 import time
 from pathlib import Path
-import sys
 
 import pytest
 

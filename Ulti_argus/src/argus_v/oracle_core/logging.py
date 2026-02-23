@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Mapping
+
+# Use python-json-logger for structured logging
+from pythonjsonlogger import jsonlogger
 
 DEFAULT_LOG_LEVEL = "INFO"
 
@@ -78,24 +80,22 @@ class PrivacyFilter(logging.Filter):
         return True
 
 
-class JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        ts = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat()
-        payload: dict[str, Any] = {
-            "ts": ts,
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
+class CustomJsonFormatter(jsonlogger.JsonFormatter):
+    """Custom JSON formatter to handle timestamp and field scrubbing compatibility."""
 
-        fields = getattr(record, "fields", None)
-        if isinstance(fields, Mapping) and fields:
-            payload["fields"] = scrub_pii(fields)
+    def add_fields(self, log_record: dict[str, Any], record: logging.LogRecord, message_dict: dict[str, Any]) -> None:
+        super().add_fields(log_record, record, message_dict)
 
-        if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
+        # Ensure timestamp is ISO 8601 with UTC
+        if not log_record.get('timestamp'):
+            now = datetime.fromtimestamp(record.created, tz=timezone.utc)
+            log_record['timestamp'] = now.isoformat()
 
-        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        # Handle 'fields' from extra if present (compatibility with log_event)
+        # Note: PrivacyFilter already scrubs record.fields if it exists,
+        # but python-json-logger might pull from record.__dict__ or extras.
+        # log_event puts 'fields' in extra, which python-json-logger puts into log_record automatically.
+        pass
 
 
 def _normalize_level(level: str | int | None) -> int:
@@ -125,7 +125,14 @@ def configure_logging(*, level: str | int | None = None) -> logging.Logger:
     handler = logging.StreamHandler()
     handler.name = handler_name
     handler.setLevel(resolved_level)
-    handler.setFormatter(JsonFormatter())
+
+    # Configure python-json-logger
+    # We include level, name, and message in the format string (timestamp added by formatter)
+    formatter = CustomJsonFormatter(
+        '%(levelname)s %(name)s %(message)s',
+        rename_fields={'levelname': 'level', 'name': 'logger'}
+    )
+    handler.setFormatter(formatter)
     handler.addFilter(PrivacyFilter())
 
     root.addHandler(handler)

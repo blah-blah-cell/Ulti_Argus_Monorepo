@@ -1,5 +1,7 @@
-from src.argus_plugins.manager import ArgusPlugin
 import logging
+
+from src.argus_plugins.manager import ArgusPlugin
+
 
 class PQCScout(ArgusPlugin):
     def name(self):

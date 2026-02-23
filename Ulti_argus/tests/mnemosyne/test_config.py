@@ -79,7 +79,7 @@ class TestMnemosyneFirebaseConfig:
             # Missing storage_bucket and service_account_path
         }
         
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             MnemosyneFirebaseConfig.from_mapping(
                 data, path="test", env={}
             )
@@ -124,7 +124,7 @@ class TestPreprocessingConfig:
             "feature_normalization_method": "invalid_method"
         }
         
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             PreprocessingConfig.from_mapping(data, path="test")
     
     def test_invalid_contamination_range(self):
@@ -133,7 +133,7 @@ class TestPreprocessingConfig:
             "contamination_range": [0.2, 0.1]  # min > max
         }
         
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             PreprocessingConfig.from_mapping(data, path="test")
 
 

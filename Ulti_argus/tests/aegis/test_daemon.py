@@ -1,12 +1,10 @@
 
-import pytest
 import os
 import sys
-import threading
-import time
 from datetime import datetime, timedelta
-from pathlib import Path
-from unittest.mock import MagicMock, patch, Mock, call, ANY
+from unittest.mock import ANY, MagicMock, Mock, patch
+
+import pytest
 
 # Ensure src is in path for imports to work
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../src"))
@@ -21,19 +19,15 @@ sys.modules['scapy.all'] = MagicMock()
 sys.modules['sklearn.ensemble'] = MagicMock()
 sys.modules['sklearn.preprocessing'] = MagicMock()
 
-from argus_v.aegis.daemon import (
-    AegisDaemon,
-    ServiceStartError,
-    ServiceStopError,
-    _KRONOS_AVAILABLE
-)
 from argus_v.aegis.config import (
     AegisConfig,
+    EnforcementConfig,
     ModelConfig,
     PollingConfig,
     PredictionConfig,
-    EnforcementConfig
 )
+from argus_v.aegis.daemon import _KRONOS_AVAILABLE, AegisDaemon, ServiceStartError
+
 
 # Mocking external dependencies
 @pytest.fixture

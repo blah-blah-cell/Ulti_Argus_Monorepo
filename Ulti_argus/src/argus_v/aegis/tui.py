@@ -40,7 +40,7 @@ class AegisDashboard:
         if config_path is None:
             config_path = str(get_default_config_path())
         self.config = load_aegis_config(config_path)
-        
+
         # Paths to poll
         self.stats_file = Path(self.config.stats_file)
         self.blacklist_db = Path(self.config.blacklist_db_path)
@@ -137,33 +137,33 @@ class AegisDashboard:
         """Create the top header pane."""
         state = self._read_engine_state()
         color = "green" if state.upper() == "RUNNING" else "red"
-        
+
         grid = Table.grid(expand=True)
         grid.add_column(justify="left", ratio=1)
         grid.add_column(justify="right")
-        
+
         title = Text("Ulti_Argus Aegis - Live Dashboard", style="bold cyan")
         status = Text(f"Engine State: {state.upper()}", style=f"bold {color}")
-        
+
         grid.add_row(title, status)
         return Panel(grid, style="cyan")
 
     def make_stats_panel(self) -> Panel:
         """Create the statistics pane."""
         stats = self._read_stats()
-        
+
         table = Table(show_header=False, expand=True, box=None)
         table.add_column("Metric", style="cyan")
         table.add_column("Value", style="bold white")
-        
+
         # Safe extraction
         total_flows = str(stats.get("total_flows_processed", 0))
         anomalies = str(stats.get("anomalies_detected", 0))
         predictions = str(stats.get("total_predictions_made", 0))
         blocks = str(stats.get("active_blacklist_entries", 0))
-        
+
         uptime = stats.get("uptime_seconds", 0)
-        
+
         # Convert uptime to H:M:S
         m, s = divmod(int(uptime), 60)
         h, m = divmod(m, 60)
@@ -174,21 +174,21 @@ class AegisDashboard:
         table.add_row("Total Predictions", predictions)
         table.add_row("Anomalies Caught", f"[red]{anomalies}[/red]")
         table.add_row("Active eBPF/OS Blocks", f"[yellow]{blocks}[/yellow]")
-        
+
         return Panel(
-            Align.center(table, vertical="middle"), 
-            title="[bold]Real-Time Telemetry[/bold]", 
+            Align.center(table, vertical="middle"),
+            title="[bold]Real-Time Telemetry[/bold]",
             border_style="blue"
         )
 
     def make_blocklist_table(self) -> Panel:
         """Create a table showing the currently active blocked IPs."""
         blocks = self._read_active_blocks()
-        
+
         table = Table(
-            expand=True, 
-            show_lines=True, 
-            header_style="bold magenta", 
+            expand=True,
+            show_lines=True,
+            header_style="bold magenta",
             border_style="magenta"
         )
         table.add_column("IP Address", style="bold cyan", width=16)
@@ -196,7 +196,7 @@ class AegisDashboard:
         table.add_column("Reason", style="white")
         table.add_column("Hits", justify="right", width=6)
         table.add_column("Blocked At", style="dim", width=20)
-        
+
         for ip, reason, risk, source, created_at, hit_count in blocks:
             # Colorize risk
             risk_color = "yellow"
@@ -204,7 +204,7 @@ class AegisDashboard:
                 risk_color = "bold red"
             elif risk == "high":
                 risk_color = "red"
-            
+
             # Format datetime
             try:
                 dt = datetime.fromisoformat(created_at).strftime("%Y-%m-%d %H:%M:%S")
@@ -218,13 +218,13 @@ class AegisDashboard:
                 str(hit_count),
                 dt
             )
-            
+
         if not blocks:
             table = Align.center(Text("No active blocks at this time.", style="dim italic"))
 
         return Panel(
-            table, 
-            title="[bold red]Active eBPF Enforcements (BLOCKLIST)[/bold red]", 
+            table,
+            title="[bold red]Active eBPF Enforcements (BLOCKLIST)[/bold red]",
             border_style="red"
         )
 
@@ -238,7 +238,7 @@ class AegisDashboard:
     def run(self):
         """Start the live UI loop."""
         print("Starting Aegis Live TUI...")
-        
+
         # Initial population
         self.update_content()
 
