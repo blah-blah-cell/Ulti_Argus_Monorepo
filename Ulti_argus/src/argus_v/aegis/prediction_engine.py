@@ -68,6 +68,7 @@ class PredictionEngine:
         feedback_manager=None,
         kronos_router=None,
         ipc_listener=None,
+        metrics=None,
     ):
         """Initialize prediction engine.
         
@@ -82,6 +83,7 @@ class PredictionEngine:
                            When provided, flows are routed to PASS / IF_ONLY /
                            ESCALATE before enforcement decisions are made.
             ipc_listener: Optional IPCListener for real-time DeepPacketSentinel flows.
+            metrics: Optional dictionary of Prometheus metrics.
         """
         # zero-trust validation of critical components
         if not polling_config:
@@ -101,6 +103,7 @@ class PredictionEngine:
         self.feedback_manager = feedback_manager
         self.kronos_router = kronos_router if _KRONOS_AVAILABLE else None
         self.ipc_listener = ipc_listener
+        self.metrics = metrics
         
         # State tracking
         self._running = False
@@ -465,7 +468,11 @@ class PredictionEngine:
                         if not self.model_manager.load_latest_model():
                             continue
 
+                    start_pred = time.time()
                     predictions_df = self.model_manager.predict_flows(df)
+                    if self.metrics:
+                        self.metrics['inference_latency'].observe(time.time() - start_pred)
+                        self.metrics['flows_analyzed'].inc(len(df))
                 except Exception as e:
                     log_event(logger, "ipc_model_prediction_error", level="error", error=str(e))
                     continue
@@ -556,7 +563,10 @@ class PredictionEngine:
                 
                 try:
                     # Make predictions
+                    start_pred = time.time()
                     predictions_df = self.model_manager.predict_flows(batch_df)
+                    if self.metrics:
+                        self.metrics['inference_latency'].observe(time.time() - start_pred)
                     
                     # Process predictions and make enforcement decisions
                     self._process_batch_predictions(predictions_df)
@@ -565,6 +575,9 @@ class PredictionEngine:
                     self._stats['total_flows_processed'] += len(batch_df)
                     self._stats['total_predictions_made'] += len(predictions_df)
                     
+                    if self.metrics:
+                        self.metrics['flows_analyzed'].inc(len(batch_df))
+
                 except ModelLoadError as e:
                     log_event(
                         logger,
@@ -1019,6 +1032,8 @@ class PredictionEngine:
                     # Update anomaly statistics
                     if prediction == -1:
                         self._stats['anomalies_detected'] += 1
+                        if self.metrics:
+                            self.metrics['anomalies_detected'].inc()
 
                         log_event(
                             logger,

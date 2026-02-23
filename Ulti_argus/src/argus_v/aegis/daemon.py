@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 from ..oracle_core.config import ValidationError
 from ..oracle_core.logging import configure_logging, log_event
@@ -36,6 +37,13 @@ except ImportError:
     _KRONOS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+# Prometheus Metrics
+AEGIS_FLOWS_ANALYZED = Counter('aegis_flows_analyzed_total', 'Total number of flows analyzed')
+AEGIS_ANOMALIES_DETECTED = Counter('aegis_anomalies_detected_total', 'Total number of anomalies detected')
+AEGIS_ACTIVE_BLOCKS = Gauge('aegis_active_blocks_gauge', 'Number of currently active IP blocks')
+AEGIS_INFERENCE_LATENCY = Histogram('aegis_inference_latency_seconds', 'Inference latency in seconds')
+AEGIS_MODEL_ACCURACY = Gauge('aegis_model_accuracy', 'Current model accuracy score')
 
 
 class AegisDaemonError(Exception):
@@ -321,6 +329,11 @@ class AegisDaemon:
 
                 # Initialize prediction engine
                 try:
+                    metrics = {
+                        'flows_analyzed': AEGIS_FLOWS_ANALYZED,
+                        'anomalies_detected': AEGIS_ANOMALIES_DETECTED,
+                        'inference_latency': AEGIS_INFERENCE_LATENCY
+                    }
                     prediction_engine = PredictionEngine(
                         polling_config=self.config.polling,
                         prediction_config=self.config.prediction,
@@ -329,7 +342,8 @@ class AegisDaemon:
                         anonymizer=anonymizer,
                         feedback_manager=feedback_manager,
                         kronos_router=kronos_router,
-                        ipc_listener=ipc_listener
+                        ipc_listener=ipc_listener,
+                        metrics=metrics
                     )
                     self._components['prediction_engine'] = prediction_engine
                 except Exception as e:
@@ -376,6 +390,21 @@ class AegisDaemon:
                     daemon=True
                 )
                 monitor_thread.start()
+
+                # Start Watchdog thread
+                watchdog_thread = threading.Thread(
+                    target=self._watchdog_loop,
+                    name="Aegis-Watchdog",
+                    daemon=True
+                )
+                watchdog_thread.start()
+
+                # Start Prometheus metrics exporter
+                try:
+                    start_http_server(9090)
+                    log_event(logger, "prometheus_exporter_started", port=9090)
+                except Exception as e:
+                    log_event(logger, "prometheus_exporter_failed", error=str(e), level="error")
 
                 log_event(
                     logger,
@@ -503,6 +532,53 @@ class AegisDaemon:
             self._running = False
             self._shutdown_event.set()
     
+    def _watchdog_loop(self) -> None:
+        """Watchdog loop to monitor prediction engine health."""
+        log_event(logger, "watchdog_started", level="info")
+        while self._running:
+            try:
+                # Check every 30 seconds
+                for _ in range(30):
+                    if not self._running:
+                        return
+                    time.sleep(1)
+
+                prediction_engine = self._components.get('prediction_engine')
+                if not prediction_engine:
+                    continue
+
+                # Check if threads are alive while engine is supposed to be running
+                if prediction_engine._running:
+                    poll_alive = prediction_engine._poll_thread and prediction_engine._poll_thread.is_alive()
+                    pred_alive = prediction_engine._prediction_thread and prediction_engine._prediction_thread.is_alive()
+
+                    ipc_alive = True
+                    if prediction_engine.ipc_listener:
+                        ipc_alive = prediction_engine._ipc_thread and prediction_engine._ipc_thread.is_alive()
+
+                    if not (poll_alive and pred_alive and ipc_alive):
+                        log_event(
+                            logger,
+                            "watchdog_prediction_engine_unresponsive",
+                            level="error",
+                            poll_thread=poll_alive,
+                            pred_thread=pred_alive,
+                            ipc_thread=ipc_alive
+                        )
+
+                        # Restart prediction engine
+                        try:
+                            log_event(logger, "watchdog_restarting_prediction_engine", level="warning")
+                            prediction_engine.stop()
+                            time.sleep(2)
+                            prediction_engine.start()
+                            log_event(logger, "watchdog_prediction_engine_restarted", level="info")
+                        except Exception as e:
+                            log_event(logger, "watchdog_restart_failed", level="error", error=str(e))
+
+            except Exception as e:
+                log_event(logger, "watchdog_error", level="error", error=str(e))
+
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""
         def signal_handler(signum, frame):
@@ -658,6 +734,22 @@ class AegisDaemon:
             except Exception as e:
                 log_event(logger, "stats_collection_failed", level="error", error=str(e))
             
+            # Update Prometheus Gauges
+            if 'blacklist_manager' in component_stats:
+                bl_stats = component_stats['blacklist_manager']
+                if isinstance(bl_stats, dict) and 'active_entries' in bl_stats:
+                    AEGIS_ACTIVE_BLOCKS.set(bl_stats['active_entries'])
+
+            if 'model_manager' in component_stats:
+                mm_stats = component_stats['model_manager']
+                if isinstance(mm_stats, dict):
+                    metadata = mm_stats.get('model_metadata', {})
+                    if metadata and 'accuracy' in metadata:
+                        try:
+                            AEGIS_MODEL_ACCURACY.set(float(metadata['accuracy']))
+                        except (ValueError, TypeError):
+                            pass
+
             # Combine all statistics
             all_stats = {
                 'daemon_stats': self._stats,
