@@ -12,9 +12,9 @@ sys.modules["sklearn.preprocessing"] = MagicMock()
 sys.modules["skops"] = MagicMock()
 sys.modules["skops.io"] = MagicMock()
 
-import time
+import time  # noqa: E402
 
-from argus_v.kronos.ip_history import IPHistoryStore, IPRecord
+from argus_v.kronos.ip_history import IPHistoryStore, IPRecord  # noqa: E402
 
 
 def test_ip_record_basics():
@@ -150,7 +150,7 @@ def test_ip_history_store_load_fail(tmp_path, caplog):
     corrupt_path = tmp_path / "corrupt.pkl"
     corrupt_path.write_text("not a pickle")
 
-    store = IPHistoryStore(persist_path=str(corrupt_path))
+    _ = IPHistoryStore(persist_path=str(corrupt_path))
 
     assert "ip_history_load_failed" in caplog.text
 

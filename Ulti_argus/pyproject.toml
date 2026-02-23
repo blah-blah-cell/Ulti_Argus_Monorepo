@@ -21,9 +21,6 @@ dependencies = [
   "torchvision>=0.15.0",
   "rich>=13.0.0",
   "textual>=0.40.0",
-  "fastapi>=0.100.0",
-  "uvicorn>=0.20.0",
-  "prometheus-client>=0.17.0",
 ]
 
 [project.scripts]
@@ -61,3 +58,4 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]
+ignore = ["E501"]

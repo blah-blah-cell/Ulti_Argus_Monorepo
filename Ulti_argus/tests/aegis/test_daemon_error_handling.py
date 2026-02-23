@@ -161,5 +161,5 @@ class TestDaemonErrorHandling:
         # Check that we got a result, not an exception
         assert status['overall_health'] != 'error'
         assert 'model_manager' in status['component_details']
-        assert status['component_details']['model_manager']['healthy'] == False
+        assert not status['component_details']['model_manager']['healthy']
         assert "Component dead" in str(status['component_details']['model_manager'].get('error', ''))

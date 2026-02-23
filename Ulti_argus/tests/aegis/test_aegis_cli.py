@@ -188,7 +188,7 @@ class TestAegisCLI:
         daemon_instance.get_status.return_value = {'status': 'ok'}
         mock_load_daemon.return_value = daemon_instance
 
-        with patch('sys.stdout') as mock_stdout:
+        with patch('sys.stdout'):
             exit_code = cli._cmd_status(mock_args)
             assert exit_code == 0
             daemon_instance.get_status.assert_called()
@@ -200,7 +200,7 @@ class TestAegisCLI:
         daemon_instance.get_health_status.return_value = {'health': 'ok'}
         mock_load_daemon.return_value = daemon_instance
 
-        with patch('sys.stdout') as mock_stdout:
+        with patch('sys.stdout'):
             exit_code = cli._cmd_health(mock_args)
             assert exit_code == 0
             daemon_instance.get_health_status.assert_called()
