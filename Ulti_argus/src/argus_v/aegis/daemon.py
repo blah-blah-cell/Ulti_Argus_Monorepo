@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import signal
+import sqlite3
 import sys
 import threading
 import time
@@ -18,6 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import numpy as np
 import yaml
 
 from ..oracle_core.config import ValidationError
@@ -56,6 +58,169 @@ class ServiceStopError(AegisDaemonError):
 class HealthCheckError(AegisDaemonError):
     """Exception raised when health check fails."""
     pass
+
+
+class OnlineLearningThread(threading.Thread):
+    """Background thread for continuous online learning."""
+
+    def __init__(self, prediction_engine: PredictionEngine, db_path: Path):
+        """Initialize online learning thread.
+
+        Args:
+            prediction_engine: Reference to the prediction engine.
+            db_path: Path to the SQLite database for buffering.
+        """
+        super().__init__(name="Aegis-OnlineLearning", daemon=True)
+        self.prediction_engine = prediction_engine
+        self.db_path = db_path
+        self._stop_event = threading.Event()
+        self.batch_size_trigger = 1000
+
+    def run(self) -> None:
+        """Run the online learning loop."""
+        log_event(logger, "online_learning_thread_started", db_path=str(self.db_path))
+
+        # Ensure DB directory exists
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            log_event(logger, "online_learning_db_dir_error", error=str(e))
+            return
+
+        while not self._stop_event.is_set():
+            try:
+                # Sleep for 5 minutes (interruptible)
+                if self._stop_event.wait(300):
+                    break
+
+                self._process_buffer()
+
+            except Exception as e:
+                log_event(logger, "online_learning_loop_error", error=str(e))
+                # Prevent tight loop on error
+                time.sleep(60)
+
+    def _process_buffer(self) -> None:
+        """Process buffered events and trigger training if ready."""
+        # 1. Drain queue
+        events = []
+        try:
+            while not self.prediction_engine.borderline_events_queue.empty():
+                events.append(self.prediction_engine.borderline_events_queue.get_nowait())
+        except Exception:
+            pass
+
+        if not events and not self.db_path.exists():
+            return
+
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Create table if needed
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS learning_buffer (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    features TEXT,
+                    score REAL,
+                    timestamp TEXT
+                )
+            """)
+
+            # Insert new events
+            if events:
+                data_to_insert = [
+                    (json.dumps(e['features']), e['score'], e['timestamp'])
+                    for e in events
+                ]
+                cursor.executemany(
+                    "INSERT INTO learning_buffer (features, score, timestamp) VALUES (?, ?, ?)",
+                    data_to_insert
+                )
+                conn.commit()
+                log_event(logger, "online_learning_buffer_updated", new_events=len(events))
+
+            # Check buffer size
+            cursor.execute("SELECT COUNT(*) FROM learning_buffer")
+            count = cursor.fetchone()[0]
+
+            if count >= self.batch_size_trigger:
+                self._trigger_partial_fit(conn, count)
+
+        except Exception as e:
+            log_event(logger, "online_learning_db_error", error=str(e))
+        finally:
+            if conn:
+                conn.close()
+
+    def _trigger_partial_fit(self, conn: sqlite3.Connection, count: int) -> None:
+        """Trigger partial fit on the model using buffered data."""
+        try:
+            # Fetch data
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, features FROM learning_buffer ORDER BY id ASC LIMIT ?",
+                (self.batch_size_trigger,)
+            )
+            rows = cursor.fetchall()
+
+            if not rows:
+                return
+
+            ids = [r[0] for r in rows]
+            feature_list = [json.loads(r[1]) for r in rows]
+
+            # Convert to DataFrame/Array
+            # We need to ensure correct column order matching the model
+            feature_columns = self.prediction_engine.model_manager.feature_columns
+
+            X = []
+            for f_dict in feature_list:
+                row_vector = [f_dict.get(col, 0) for col in feature_columns]
+                X.append(row_vector)
+
+            X_arr = np.array(X)
+
+            # Access the model (thread-safe access would be ideal, but partial_fit handles internal state)
+            # We acquire the lock to prevent swapping during update
+            with self.prediction_engine._model_lock:
+                model = self.prediction_engine.model_manager._model
+
+                if model is None:
+                    log_event(logger, "online_learning_skipped_no_model")
+                    return
+
+                updated = False
+                if hasattr(model, "partial_fit"):
+                    model.partial_fit(X_arr)
+                    updated = True
+                    log_event(logger, "online_learning_partial_fit_applied", sample_count=len(X_arr))
+                elif hasattr(model, "warm_start") and getattr(model, "warm_start", False):
+                    # For IsolationForest with warm_start=True, fit adds more trees
+                    model.fit(X_arr)
+                    updated = True
+                    log_event(logger, "online_learning_warm_start_fit_applied", sample_count=len(X_arr))
+                else:
+                    log_event(logger, "online_learning_model_not_supported")
+
+            # Clean up buffer regardless of success to prevent stuck queue?
+            # Or only on success? If model doesn't support it, we should probably clear to avoid infinite growth.
+            # If update failed due to error, we might want to retry, but for "not supported", we clear.
+            # Let's clear the processed rows.
+
+            placeholders = ','.join(['?'] * len(ids))
+            cursor.execute(f"DELETE FROM learning_buffer WHERE id IN ({placeholders})", ids)
+            conn.commit()
+
+            log_event(logger, "online_learning_buffer_cleared", count=len(ids))
+
+        except Exception as e:
+            log_event(logger, "online_learning_update_failed", error=str(e))
+
+    def stop(self) -> None:
+        """Stop the online learning thread."""
+        self._stop_event.set()
 
 
 class AegisDaemon:
@@ -103,7 +268,8 @@ class AegisDaemon:
             'feedback_manager': None,
             'kronos_router': None,
             'ipc_listener': None,
-            'prediction_engine': None
+            'prediction_engine': None,
+            'online_learning_thread': None
         }
         
         # Statistics and monitoring
@@ -377,6 +543,18 @@ class AegisDaemon:
                 )
                 monitor_thread.start()
 
+                # Start Online Learning Thread
+                try:
+                    feedback_dir = Path(self.config.enforcement.feedback_dir)
+                    ol_thread = OnlineLearningThread(
+                        prediction_engine=prediction_engine,
+                        db_path=feedback_dir / "online_learning.db"
+                    )
+                    ol_thread.start()
+                    self._components['online_learning_thread'] = ol_thread
+                except Exception as ol_err:
+                    log_event(logger, "online_learning_start_failed", error=str(ol_err))
+
                 log_event(
                     logger,
                     "aegis_daemon_started",
@@ -461,6 +639,16 @@ class AegisDaemon:
                 log_event(logger, "ipc_listener_stop_failed", level="warning", error=str(e))
                 shutdown_errors.append(f"ipc_listener_error: {e}")
             
+            # Stop Online Learning Thread
+            try:
+                ol_thread = self._components.get('online_learning_thread')
+                if ol_thread:
+                    ol_thread.stop()
+                    ol_thread.join(timeout=5)
+            except Exception as e:
+                log_event(logger, "online_learning_stop_failed", level="warning", error=str(e))
+                shutdown_errors.append(f"online_learning_error: {e}")
+
             # Wait for monitoring thread to notice _running=False
             time.sleep(1)
             
