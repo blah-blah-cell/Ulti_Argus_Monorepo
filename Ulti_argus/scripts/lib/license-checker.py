@@ -108,7 +108,7 @@ class ComplianceChecker:
             check_result["checks"]["compliance_enabled"] = {
                 "required": True,
                 "value": compliance_enabled,
-                "valid": compliance_enabled == True
+                "valid": compliance_enabled
             }
             
             # Determine overall status
@@ -192,7 +192,7 @@ class ComplianceChecker:
             check_result["checks"]["monitoring_enabled"] = {
                 "required": True,
                 "value": monitoring_enabled,
-                "valid": monitoring_enabled == True
+                "valid": monitoring_enabled
             }
             
             # Check branch protection settings
@@ -200,7 +200,7 @@ class ComplianceChecker:
             check_result["checks"]["branch_protection"] = {
                 "required": True,
                 "value": branch_protection,
-                "valid": branch_protection == True
+                "valid": branch_protection
             }
             
             all_checks_valid = all(check.get("valid", False) for check in check_result["checks"].values())
@@ -260,7 +260,7 @@ class ComplianceChecker:
             check_result["checks"]["anonymization_required"] = {
                 "required": True,
                 "value": anonymization_required,
-                "valid": anonymization_required == True
+                "valid": anonymization_required
             }
             
             # Check if automated deletion is enabled
@@ -268,7 +268,7 @@ class ComplianceChecker:
             check_result["checks"]["automated_deletion"] = {
                 "required": True,
                 "value": automated_deletion,
-                "valid": automated_deletion == True
+                "valid": automated_deletion
             }
             
             # Check audit trail requirement
@@ -276,7 +276,7 @@ class ComplianceChecker:
             check_result["checks"]["audit_required"] = {
                 "required": True,
                 "value": audit_required,
-                "valid": audit_required == True
+                "valid": audit_required
             }
             
             all_checks_valid = all(check.get("valid", False) for check in check_result["checks"].values())
@@ -327,7 +327,7 @@ class ComplianceChecker:
             check_result["checks"]["encryption_required"] = {
                 "required": True,
                 "value": encryption_required,
-                "valid": encryption_required == True
+                "valid": encryption_required
             }
             
             # Check access control requirements
@@ -335,7 +335,7 @@ class ComplianceChecker:
             check_result["checks"]["access_control"] = {
                 "required": True,
                 "value": access_control,
-                "valid": access_control == True
+                "valid": access_control
             }
             
             # Check incident response requirement
@@ -343,7 +343,7 @@ class ComplianceChecker:
             check_result["checks"]["incident_response"] = {
                 "required": True,
                 "value": incident_response,
-                "valid": incident_response == True
+                "valid": incident_response
             }
             
             all_checks_valid = all(check.get("valid", False) for check in check_result["checks"].values())
@@ -457,7 +457,7 @@ class ComplianceChecker:
             check_result["checks"]["consent_management"] = {
                 "required": True,
                 "value": consent_management,
-                "valid": consent_management == True
+                "valid": consent_management
             }
             
             # Check withdrawal mechanism
@@ -465,7 +465,7 @@ class ComplianceChecker:
             check_result["checks"]["withdrawal_mechanism"] = {
                 "required": True,
                 "value": withdrawal_mechanism,
-                "valid": withdrawal_mechanism == True
+                "valid": withdrawal_mechanism
             }
             
             # Check data subject rights implementation
@@ -473,7 +473,7 @@ class ComplianceChecker:
             check_result["checks"]["rights_implementation"] = {
                 "required": True,
                 "value": rights_implementation,
-                "valid": rights_implementation == True
+                "valid": rights_implementation
             }
             
             all_checks_valid = all(check.get("valid", False) for check in check_result["checks"].values())

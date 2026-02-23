@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import pickle
 import shutil
 import ssl
@@ -19,7 +18,7 @@ import sys
 import tempfile
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -491,7 +490,7 @@ class NSLKDDTrainer:
     def fit_scaler(self, X: pd.DataFrame) -> StandardScaler:
         """Fit StandardScaler on training data."""
         self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X)
+        self.scaler.fit(X)
         
         logger.info(f"Fitted scaler on {len(X)} samples")
         
@@ -576,7 +575,7 @@ class NSLKDDTrainer:
                 random_state=self.config.random_state,
             )
             
-            logger.info(f"Using unsupervised Isolation Forest (no labels provided)")
+            logger.info("Using unsupervised Isolation Forest (no labels provided)")
             
             contamination = 0.05
             self.fit_scaler(X_train)
@@ -1026,7 +1025,7 @@ def main():
         
         logger.info("=" * 60)
         logger.info("ACCEPTANCE CRITERIA CHECK:")
-        logger.info(f"  - Model trained without errors: PASS")
+        logger.info("  - Model trained without errors: PASS")
         logger.info(f"  - Precision >= 85%: {'PASS' if precision >= 0.85 else 'FAIL'} ({precision:.1%})")
         logger.info(
             f"  - Distinguishes attacks from normal: {'PASS' if tpr > 0.5 else 'FAIL'} (TPR: {tpr:.1%})"

@@ -2,6 +2,13 @@
 
 from datetime import datetime
 from unittest.mock import Mock, patch
+import sys
+from unittest.mock import MagicMock
+import importlib.util
+
+# Mock sklearn.model_selection if missing
+if 'sklearn.model_selection' not in sys.modules:
+    sys.modules['sklearn.model_selection'] = MagicMock()
 
 import pandas as pd
 import pytest
