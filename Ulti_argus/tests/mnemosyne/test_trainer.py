@@ -8,6 +8,12 @@ import pandas as pd
 import pytest
 import skops.io as sio
 from sklearn.preprocessing import StandardScaler
+from unittest.mock import MagicMock
+import sys
+
+# Mock sklearn.model_selection if missing
+if 'sklearn.model_selection' not in sys.modules:
+    sys.modules['sklearn.model_selection'] = MagicMock()
 
 from argus_v.mnemosyne.trainer import IsolationForestTrainer
 

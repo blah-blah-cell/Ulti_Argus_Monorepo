@@ -13,11 +13,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Check for Firebase availability without importing unused modules
-FIREBASE_AVAILABLE = (
-    importlib.util.find_spec("firebase_admin") is not None
-    and importlib.util.find_spec("google.cloud.storage") is not None
-)
+try:
+    import firebase_admin  # noqa: F401
+    from firebase_admin import credentials, storage  # noqa: F401
+    from google.cloud import storage as gcs  # noqa: F401
+    FIREBASE_AVAILABLE = True
+except ImportError:
+    FIREBASE_AVAILABLE = False
 
 import numpy as np
 import pandas as pd

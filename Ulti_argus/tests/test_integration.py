@@ -5,6 +5,10 @@ import sys
 # d:\Argus_AI\tests\test_integration.py -> dirname = d:\Argus_AI\tests -> .. = d:\Argus_AI
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
+from unittest.mock import MagicMock
+if 'torch.nn' not in sys.modules:
+    sys.modules['torch.nn'] = MagicMock()
+
 from argus_v.mnemosyne.pytorch_inference import analyze_payload
 
 
