@@ -8,6 +8,7 @@ blocklist.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -45,12 +46,49 @@ class AegisDashboard:
         self.blacklist_db = Path(self.config.blacklist_db_path)
         self.state_file = Path(self.config.state_file)
 
+        # Persistent DB connection
+        self._conn = None
+
+        # Caching
+        self._stats_cache = {}
+        self._stats_mtime = 0.0
+        self._state_cache = "Not Running / Unknown"
+        self._state_mtime = 0.0
+
+        # Layout reuse
+        self.layout = Layout()
+        self.layout.split_column(
+            Layout(name="header", size=3),
+            Layout(name="main")
+        )
+        self.layout["main"].split_row(
+            Layout(name="left_panel", ratio=1),
+            Layout(name="right_panel", ratio=2)
+        )
+
+    def _get_db_connection(self):
+        """Get or create a persistent SQLite connection."""
+        if self._conn:
+            return self._conn
+
+        if self.blacklist_db.exists():
+            try:
+                self._conn = sqlite3.connect(self.blacklist_db, check_same_thread=False)
+                return self._conn
+            except Exception:
+                pass
+        return None
+
     def _read_stats(self) -> Dict[str, Any]:
         """Read the Aegis stats.json file safely."""
         try:
             if self.stats_file.exists():
-                with open(self.stats_file, "r") as f:
-                    return json.load(f)
+                mtime = os.stat(self.stats_file).st_mtime
+                if mtime != self._stats_mtime:
+                    with open(self.stats_file, "r") as f:
+                        self._stats_cache = json.load(f)
+                        self._stats_mtime = mtime
+                return self._stats_cache
         except Exception:
             pass
         return {}
@@ -59,30 +97,40 @@ class AegisDashboard:
         """Read the Aegis state.json file safely."""
         try:
             if self.state_file.exists():
-                with open(self.state_file, "r") as f:
-                    state = json.load(f)
-                    return state.get("state", "UNKNOWN")
+                mtime = os.stat(self.state_file).st_mtime
+                if mtime != self._state_mtime:
+                    with open(self.state_file, "r") as f:
+                        state = json.load(f)
+                        self._state_cache = state.get("state", "UNKNOWN")
+                        self._state_mtime = mtime
+                return self._state_cache
         except Exception:
             pass
         return "Not Running / Unknown"
 
     def _read_active_blocks(self, limit: int = 15) -> List[tuple]:
         """Read the latest active blocks from the SQLite DB."""
-        if not self.blacklist_db.exists():
+        conn = self._get_db_connection()
+        if not conn:
             return []
 
         try:
-            with sqlite3.connect(self.blacklist_db) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT ip_address, reason, risk_level, source, created_at, hit_count
-                    FROM blacklist
-                    WHERE is_active = TRUE
-                    ORDER BY created_at DESC
-                    LIMIT ?
-                """, (limit,))
-                return cursor.fetchall()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT ip_address, reason, risk_level, source, created_at, hit_count
+                FROM blacklist
+                WHERE is_active = TRUE
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (limit,))
+            return cursor.fetchall()
         except Exception:
+            # Reset connection on failure
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._conn = None
             return []
 
     def make_header(self) -> Panel:
@@ -180,35 +228,25 @@ class AegisDashboard:
             border_style="red"
         )
 
-    def generate_layout(self) -> Layout:
-        """Build the complete Rich Layout grid."""
-        layout = Layout()
-        
-        layout.split_column(
-            Layout(name="header", size=3),
-            Layout(name="main")
-        )
-        
-        layout["main"].split_row(
-            Layout(name="left_panel", ratio=1),
-            Layout(name="right_panel", ratio=2)
-        )
-        
-        layout["header"].update(self.make_header())
-        layout["left_panel"].update(self.make_stats_panel())
-        layout["right_panel"].update(self.make_blocklist_table())
-        
-        return layout
+    def update_content(self) -> Layout:
+        """Update the content of the existing layout."""
+        self.layout["header"].update(self.make_header())
+        self.layout["left_panel"].update(self.make_stats_panel())
+        self.layout["right_panel"].update(self.make_blocklist_table())
+        return self.layout
 
     def run(self):
         """Start the live UI loop."""
         print("Starting Aegis Live TUI...")
         
-        with Live(self.generate_layout(), refresh_per_second=2, screen=True) as live:
+        # Initial population
+        self.update_content()
+
+        with Live(self.layout, refresh_per_second=2, screen=True) as live:
             try:
                 while True:
                     time.sleep(1.0) # Refresh every second
-                    live.update(self.generate_layout())
+                    live.update(self.update_content())
             except KeyboardInterrupt:
                 pass
 
