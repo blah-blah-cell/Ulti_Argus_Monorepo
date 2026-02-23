@@ -1,5 +1,7 @@
 # Ulti_Argus Monorepo
 
+[![CI](https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/actions/workflows/ci.yml/badge.svg)](https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/actions/workflows/ci.yml)
+
 This repository is the central monorepo containing the Ulti_Argus ecosystem. It is divided into two main sub-projects:
 
 ## 1. [Ulti_argus](./Ulti_argus/)
