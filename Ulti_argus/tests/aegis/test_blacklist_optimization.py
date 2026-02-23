@@ -1,10 +1,11 @@
-import pytest
-from unittest.mock import patch, MagicMock
-from argus_v.aegis.blacklist_manager import BlacklistManager
-from pathlib import Path
-import tempfile
 import shutil
 import subprocess
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+from argus_v.aegis.blacklist_manager import BlacklistManager
+
 
 class TestBlacklistOptimization:
     def setup_method(self):

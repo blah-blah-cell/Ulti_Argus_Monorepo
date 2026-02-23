@@ -69,7 +69,7 @@ class TestFirebaseDataLoader:
         mock_bucket = Mock()
         mock_storage.bucket.return_value = mock_bucket
         
-        loader = FirebaseDataLoader(firebase_config)
+        FirebaseDataLoader(firebase_config)
         
         # Verify Firebase was initialized correctly
         mock_firebase_admin.credentials.Certificate.assert_called_once_with("/fake/path/service-account.json")

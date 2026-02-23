@@ -783,11 +783,11 @@ class ModelManager:
             
             # Select and prepare features
             features_df = flows_df[required_cols].copy()
-            
+
             # Convert to numeric, replacing non-numeric values with 0
             for col in features_df.columns:
                 features_df[col] = pd.to_numeric(features_df[col], errors='coerce').fillna(0)
-            
+
             # Handle categorical features
             if 'protocol' in features_df.columns:
                 # Convert protocol to numeric (TCP=1, UDP=2, ICMP=3, etc.)

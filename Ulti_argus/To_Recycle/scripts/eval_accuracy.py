@@ -1,16 +1,18 @@
-import torch
 import os
 import sys
+
+import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 # Ensure src is in path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
-from src.mnemosyne.model import PayloadClassifier, create_model
+from src.mnemosyne.model import PayloadClassifier
 
 MODEL_PATH = "d:/Argus_AI/models/payload_classifier.pth"
 
 # Reuse data generation functions from training script (duplicate for simplicity)
 import random
+
 
 def generate_normal_payload():
     methods = [b"GET", b"POST"]

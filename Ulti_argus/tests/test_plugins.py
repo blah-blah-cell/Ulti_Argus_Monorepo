@@ -1,11 +1,12 @@
-import sys
 import os
+import sys
 import unittest
 
 # Ensure src is in path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
 
 from src.argus_plugins.manager import PluginManager
+
 
 class TestArgusPlugins(unittest.TestCase):
     def setUp(self):
@@ -55,7 +56,8 @@ class TestArgusPlugins(unittest.TestCase):
     def test_auto_pentest(self):
         print("\n[TEST] Testing Auto-Pentest (Red Team)...")
         # Trigger the drill payload from the plugin itself (or manually craft it)
-        # Note: In a real test, we'd instantiate the specific class, but here we scan generic content
+        # Note: In a real test, we'd instantiate the specific class,
+        # but here we scan generic content
         payload = b"GET /?q=<script>alert('RedTeam-XSS-Probe')</script> HTTP/1.1"
         results = self.mgr.run_on_payload(payload)
         

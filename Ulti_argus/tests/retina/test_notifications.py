@@ -19,11 +19,11 @@ sys.modules["joblib"] = MagicMock()
 sys.modules["skops"] = MagicMock()
 sys.modules["torch"] = MagicMock()
 
-import pytest
+import pytest  # noqa: E402
 
-from argus_v.retina.config import AlertsConfig, EmailConfig, WebhookConfig
-from argus_v.retina.health_monitor import HealthAlert, HealthMetrics
-from argus_v.retina.notifications import AlertNotificationDispatcher
+from argus_v.retina.config import AlertsConfig, EmailConfig, WebhookConfig  # noqa: E402
+from argus_v.retina.health_monitor import HealthAlert, HealthMetrics  # noqa: E402
+from argus_v.retina.notifications import AlertNotificationDispatcher  # noqa: E402
 
 
 @pytest.fixture

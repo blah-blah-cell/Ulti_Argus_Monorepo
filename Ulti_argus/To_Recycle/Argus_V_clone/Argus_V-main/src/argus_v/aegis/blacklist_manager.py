@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import ipaddress
 import logging
 import sqlite3
 import subprocess

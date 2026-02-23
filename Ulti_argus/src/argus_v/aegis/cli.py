@@ -14,12 +14,17 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..oracle_core.logging import configure_logging
 from .config import load_aegis_config
-from .daemon import AegisDaemon
+
+if TYPE_CHECKING:
+    from .daemon import AegisDaemon
+
+logger = logging.getLogger(__name__)
 
 
 class AegisCLI:
@@ -27,7 +32,7 @@ class AegisCLI:
     
     def __init__(self):
         """Initialize CLI interface."""
-        self.daemon = None
+        self.daemon: Optional["AegisDaemon"] = None
     
     def setup_logging(self, verbose: bool = False) -> None:
         """Set up logging for CLI operations.
@@ -63,7 +68,7 @@ class AegisCLI:
             return self._handle_command(parsed_args)
             
         except Exception as e:
-            print(f"Error: {e}", file=sys.stderr)
+            logger.error(f"Error: {e}")
             return 1
     
     def _create_parser(self) -> argparse.ArgumentParser:
@@ -353,7 +358,7 @@ Examples:
             Exit code
         """
         if not args.command:
-            print("No command specified. Use --help for usage information.")
+            logger.error("No command specified. Use --help for usage information.")
             return 1
         
         try:
@@ -382,17 +387,17 @@ Examples:
             elif args.command == 'feedback':
                 return self._cmd_feedback(args)
             else:
-                print(f"Unknown command: {args.command}")
+                logger.error(f"Unknown command: {args.command}")
                 return 1
                 
         except KeyboardInterrupt:
-            print("\\nInterrupted by user")
+            logger.info("Interrupted by user")
             return 1
         except Exception as e:
-            print(f"Command failed: {e}", file=sys.stderr)
+            logger.error(f"Command failed: {e}")
             return 1
     
-    def _load_daemon(self, config_path: str) -> AegisDaemon:
+    def _load_daemon(self, config_path: str) -> "AegisDaemon":
         """Load and initialize daemon.
         
         Args:
@@ -406,6 +411,9 @@ Examples:
             if not Path(config_path).exists():
                 raise FileNotFoundError(f"Configuration file not found: {config_path}")
             
+            # Import daemon locally to avoid heavy dependencies on CLI load
+            from .daemon import AegisDaemon
+
             # Load daemon (but don't start it yet)
             daemon = AegisDaemon(config_path)
             return daemon
@@ -422,7 +430,7 @@ Examples:
         Returns:
             Exit code
         """
-        print(f"Starting Aegis daemon with config: {args.config}")
+        logger.info(f"Starting Aegis daemon with config: {args.config}")
         
         try:
             daemon = self._load_daemon(args.config)
@@ -433,15 +441,15 @@ Examples:
             if args.daemon:
                 # Daemon mode - check if already running
                 if self._is_process_running(pid_file):
-                    print("Daemon is already running")
+                    logger.info("Daemon is already running")
                     return 0
                 
                 # Start as daemon
-                import daemon
-                import daemon.pidfile
+                import daemon as python_daemon
+                import daemon.pidfile as python_daemon_pidfile
                 
-                with daemon.DaemonContext(
-                    pidfile=daemon.pidfile.PIDLockFile(pid_file),
+                with python_daemon.DaemonContext(
+                    pidfile=python_daemon_pidfile.PIDLockFile(pid_file),
                     signal_map={
                         signal.SIGTERM: daemon.shutdown_requested,
                         signal.SIGINT: daemon.shutdown_requested,
@@ -455,25 +463,25 @@ Examples:
             else:
                 # Foreground mode
                 if not daemon.start():
-                    print("Failed to start daemon")
+                    logger.error("Failed to start daemon")
                     return 1
                 
-                print("Daemon started successfully")
-                print("Press Ctrl+C to stop...")
+                logger.info("Daemon started successfully")
+                logger.info("Press Ctrl+C to stop...")
                 
                 try:
                     while daemon._running:
                         time.sleep(1)
                 except KeyboardInterrupt:
-                    print("\\nShutting down...")
+                    logger.info("Shutting down...")
                     daemon.stop()
                 finally:
-                    print("Daemon stopped")
+                    logger.info("Daemon stopped")
             
             return 0
             
         except Exception as e:
-            print(f"Failed to start daemon: {e}")
+            logger.error(f"Failed to start daemon: {e}")
             return 1
     
     def _cmd_stop(self, args) -> int:
@@ -485,15 +493,16 @@ Examples:
         Returns:
             Exit code
         """
-        print("Stopping Aegis daemon...")
+        logger.info("Stopping Aegis daemon...")
         
         try:
-            daemon = self._load_daemon(args.config)
+            # Load config directly to get PID file
+            config = load_aegis_config(args.config)
+            pid_file = config.pid_file
             
             # Try graceful stop first
             if not args.force:
                 # Check if PID file exists and try to stop gracefully
-                pid_file = daemon.config.pid_file
                 if Path(pid_file).exists():
                     try:
                         with open(pid_file, 'r') as f:
@@ -501,7 +510,7 @@ Examples:
                         
                         # Send SIGTERM
                         os.kill(pid, signal.SIGTERM)
-                        print(f"Sent stop signal to process {pid}")
+                        logger.info(f"Sent stop signal to process {pid}")
                         
                         # Wait for graceful shutdown
                         for i in range(args.timeout):
@@ -509,22 +518,22 @@ Examples:
                                 os.kill(pid, 0)  # Check if process exists
                                 time.sleep(1)
                             except OSError:
-                                print("Daemon stopped successfully")
+                                logger.info("Daemon stopped successfully")
                                 return 0
                         
-                        print("Graceful shutdown timeout, forcing stop...")
+                        logger.warning("Graceful shutdown timeout, forcing stop...")
                         
                     except (ValueError, OSError, FileNotFoundError):
                         pass
             
             # Force stop
             if args.force:
-                self._force_stop_daemon(daemon.config.pid_file)
+                self._force_stop_daemon(pid_file)
             
             return 0
             
         except Exception as e:
-            print(f"Failed to stop daemon: {e}")
+            logger.error(f"Failed to stop daemon: {e}")
             return 1
     
     def _cmd_status(self, args) -> int:
@@ -537,18 +546,18 @@ Examples:
             Exit code
         """
         try:
-            daemon = self._load_daemon(args.config)
-            status = daemon.get_status()
+            config = load_aegis_config(args.config)
+            status = self._get_daemon_status(config)
             
             if args.json:
-                print(json.dumps(status, indent=2, default=str))
+                logger.info("Daemon status", extra={'status': status})
             else:
                 self._print_status(status)
             
             return 0
             
         except Exception as e:
-            print(f"Failed to get status: {e}")
+            logger.error(f"Failed to get status: {e}")
             return 1
     
     def _cmd_health(self, args) -> int:
@@ -561,18 +570,19 @@ Examples:
             Exit code
         """
         try:
-            daemon = self._load_daemon(args.config)
-            health = daemon.get_health_status()
+            config = load_aegis_config(args.config)
+            status = self._get_daemon_status(config)
+            health = status.get('health', {})
             
             if args.json:
-                print(json.dumps(health, indent=2, default=str))
+                logger.info("Daemon health", extra={'health': health})
             else:
                 self._print_health(health)
             
             return 0
             
         except Exception as e:
-            print(f"Failed to get health status: {e}")
+            logger.error(f"Failed to get health status: {e}")
             return 1
     
     def _cmd_validate(self, args) -> int:
@@ -588,22 +598,22 @@ Examples:
             # Load configuration
             config = load_aegis_config(args.config)
             
-            print("Configuration validation:")
-            print("  ✓ Configuration loaded successfully")
-            print(f"  ✓ Model path: {config.model.model_local_path}")
-            print(f"  ✓ Scaler path: {config.model.scaler_local_path}")
-            print(f"  ✓ CSV directory: {config.polling.csv_directory}")
-            print(f"  ✓ Poll interval: {config.polling.poll_interval_seconds}s")
-            print(f"  ✓ Anomaly threshold: {config.prediction.anomaly_threshold}")
-            print(f"  ✓ High-risk threshold: {config.prediction.high_risk_threshold}")
-            print(f"  ✓ Dry run duration: {config.enforcement.dry_run_duration_days} days")
-            print(f"  ✓ Emergency stop file: {config.enforcement.emergency_stop_file}")
+            logger.info("Configuration validation:")
+            logger.info("  ✓ Configuration loaded successfully")
+            logger.info(f"  ✓ Model path: {config.model.model_local_path}")
+            logger.info(f"  ✓ Scaler path: {config.model.scaler_local_path}")
+            logger.info(f"  ✓ CSV directory: {config.polling.csv_directory}")
+            logger.info(f"  ✓ Poll interval: {config.polling.poll_interval_seconds}s")
+            logger.info(f"  ✓ Anomaly threshold: {config.prediction.anomaly_threshold}")
+            logger.info(f"  ✓ High-risk threshold: {config.prediction.high_risk_threshold}")
+            logger.info(f"  ✓ Dry run duration: {config.enforcement.dry_run_duration_days} days")
+            logger.info(f"  ✓ Emergency stop file: {config.enforcement.emergency_stop_file}")
             
             if config.firebase:
-                print(f"  ✓ Firebase: {config.firebase.project_id}")
+                logger.info(f"  ✓ Firebase: {config.firebase.project_id}")
             
             if config.github:
-                print(f"  ✓ GitHub: {config.github.base_url}")
+                logger.info(f"  ✓ GitHub: {config.github.base_url}")
             
             # Check directories
             required_dirs = [
@@ -616,15 +626,15 @@ Examples:
             
             for dir_path in required_dirs:
                 if dir_path.exists() and dir_path.is_dir():
-                    print(f"  ✓ Directory exists: {dir_path}")
+                    logger.info(f"  ✓ Directory exists: {dir_path}")
                 else:
-                    print(f"  ⚠ Directory missing: {dir_path}")
+                    logger.warning(f"  ⚠ Directory missing: {dir_path}")
             
-            print("\\nConfiguration validation completed successfully")
+            logger.info("Configuration validation completed successfully")
             return 0
             
         except Exception as e:
-            print(f"Configuration validation failed: {e}")
+            logger.error(f"Configuration validation failed: {e}")
             return 1
     
     def _cmd_test(self, args) -> int:
@@ -636,30 +646,30 @@ Examples:
         Returns:
             Exit code
         """
-        print("Testing Aegis components...")
+        logger.info("Testing Aegis components...")
         
         try:
             daemon = self._load_daemon(args.config)
             
             # Test model loading
             if args.model_load or not any([args.csv, args.blacklist]):
-                print("\\n=== Model Loading Test ===")
+                logger.info("=== Model Loading Test ===")
                 if daemon._components.get('model_manager'):
                     model_manager = daemon._components['model_manager']
                     success = model_manager.load_latest_model()
                     if success:
-                        print("✓ Model loaded successfully")
+                        logger.info("✓ Model loaded successfully")
                         info = model_manager.get_model_info()
-                        print(f"  Model type: {info.get('model_type')}")
-                        print(f"  Scaler type: {info.get('scaler_type')}")
+                        logger.info(f"  Model type: {info.get('model_type')}")
+                        logger.info(f"  Scaler type: {info.get('scaler_type')}")
                     else:
-                        print("✗ Model loading failed")
+                        logger.error("✗ Model loading failed")
                 else:
-                    print("✗ Model manager not initialized")
+                    logger.error("✗ Model manager not initialized")
             
             # Test blacklist operations
             if args.blacklist or not any([args.csv, args.model_load]):
-                print("\\n=== Blacklist Test ===")
+                logger.info("=== Blacklist Test ===")
                 if daemon._components.get('blacklist_manager'):
                     blacklist_manager = daemon._components['blacklist_manager']
                     
@@ -671,56 +681,56 @@ Examples:
                         risk_level="low"
                     )
                     if success:
-                        print(f"✓ Added {test_ip} to blacklist")
+                        logger.info(f"✓ Added {test_ip} to blacklist")
                         
                         # Test lookup
                         is_blacklisted = blacklist_manager.is_blacklisted(test_ip)
                         if is_blacklisted:
-                            print(f"✓ Found {test_ip} in blacklist")
+                            logger.info(f"✓ Found {test_ip} in blacklist")
                         else:
-                            print(f"✗ Could not find {test_ip} in blacklist")
+                            logger.error(f"✗ Could not find {test_ip} in blacklist")
                         
                         # Test remove
                         success = blacklist_manager.remove_from_blacklist(test_ip)
                         if success:
-                            print(f"✓ Removed {test_ip} from blacklist")
+                            logger.info(f"✓ Removed {test_ip} from blacklist")
                         else:
-                            print(f"✗ Could not remove {test_ip} from blacklist")
+                            logger.error(f"✗ Could not remove {test_ip} from blacklist")
                     else:
-                        print("✗ Failed to add test entry to blacklist")
+                        logger.error("✗ Failed to add test entry to blacklist")
                 else:
-                    print("✗ Blacklist manager not initialized")
+                    logger.error("✗ Blacklist manager not initialized")
             
             # Test CSV prediction
             if args.csv:
-                print("\\n=== CSV Prediction Test ===")
+                logger.info("=== CSV Prediction Test ===")
                 csv_path = Path(args.csv)
                 if csv_path.exists():
-                    print(f"Testing with CSV: {csv_path}")
+                    logger.info(f"Testing with CSV: {csv_path}")
                     
                     if daemon._components.get('prediction_engine'):
                         prediction_engine = daemon._components['prediction_engine']
                         success = prediction_engine.force_process_file(csv_path)
                         if success:
-                            print("✓ CSV processing completed")
+                            logger.info("✓ CSV processing completed")
                             stats = prediction_engine.get_statistics()
-                            print(f"  Flows processed: {stats.get('total_flows_processed', 0)}")
-                            print(f"  Predictions made: {stats.get('total_predictions_made', 0)}")
-                            print(f"  Anomalies detected: {stats.get('anomalies_detected', 0)}")
+                            logger.info(f"  Flows processed: {stats.get('total_flows_processed', 0)}")
+                            logger.info(f"  Predictions made: {stats.get('total_predictions_made', 0)}")
+                            logger.info(f"  Anomalies detected: {stats.get('anomalies_detected', 0)}")
                         else:
-                            print("✗ CSV processing failed")
+                            logger.error("✗ CSV processing failed")
                     else:
-                        print("✗ Prediction engine not initialized")
+                        logger.error("✗ Prediction engine not initialized")
                 else:
-                    print(f"✗ CSV file not found: {csv_path}")
+                    logger.error(f"✗ CSV file not found: {csv_path}")
             
-            print("\\n=== Test Summary ===")
-            print("All requested tests completed")
+            logger.info("=== Test Summary ===")
+            logger.info("All requested tests completed")
             
             return 0
             
         except Exception as e:
-            print(f"Test failed: {e}")
+            logger.error(f"Test failed: {e}")
             return 1
     
     def _cmd_emergency_stop(self, args) -> int:
@@ -732,21 +742,21 @@ Examples:
         Returns:
             Exit code
         """
-        print(f"Emergency stop activated: {args.reason}")
+        logger.info(f"Emergency stop activated: {args.reason}")
         
         try:
             daemon = self._load_daemon(args.config)
             success = daemon.emergency_stop(args.reason)
             
             if success:
-                print("Emergency stop activated successfully")
+                logger.info("Emergency stop activated successfully")
                 return 0
             else:
-                print("Failed to activate emergency stop")
+                logger.error("Failed to activate emergency stop")
                 return 1
                 
         except Exception as e:
-            print(f"Emergency stop failed: {e}")
+            logger.error(f"Emergency stop failed: {e}")
             return 1
     
     def _cmd_emergency_restore(self, args) -> int:
@@ -758,21 +768,21 @@ Examples:
         Returns:
             Exit code
         """
-        print(f"Emergency restore: {args.reason}")
+        logger.info(f"Emergency restore: {args.reason}")
         
         try:
             daemon = self._load_daemon(args.config)
             success = daemon.emergency_restore(args.reason)
             
             if success:
-                print("Emergency restore completed successfully")
+                logger.info("Emergency restore completed successfully")
                 return 0
             else:
-                print("Failed to restore emergency state")
+                logger.error("Failed to restore emergency state")
                 return 1
                 
         except Exception as e:
-            print(f"Emergency restore failed: {e}")
+            logger.error(f"Emergency restore failed: {e}")
             return 1
     
     def _cmd_stats(self, args) -> int:
@@ -785,18 +795,18 @@ Examples:
             Exit code
         """
         try:
-            daemon = self._load_daemon(args.config)
-            status = daemon.get_status()
+            config = load_aegis_config(args.config)
+            status = self._get_daemon_status(config)
             
             if args.json:
-                print(json.dumps(status, indent=2, default=str))
+                logger.info("Daemon statistics", extra={'stats': status})
             else:
                 self._print_detailed_stats(status)
             
             return 0
             
         except Exception as e:
-            print(f"Failed to get statistics: {e}")
+            logger.error(f"Failed to get statistics: {e}")
             return 1
     
     def _cmd_model(self, args) -> int:
@@ -812,43 +822,43 @@ Examples:
             daemon = self._load_daemon(args.config)
             
             if not args.model_command:
-                print("Model subcommand required")
+                logger.error("Model subcommand required")
                 return 1
             
             if args.model_command == 'load':
-                print("Loading latest model...")
+                logger.info("Loading latest model...")
                 if daemon._components.get('model_manager'):
                     model_manager = daemon._components['model_manager']
                     success = model_manager.load_latest_model()
                     if success:
-                        print("✓ Model loaded successfully")
+                        logger.info("✓ Model loaded successfully")
                     else:
-                        print("✗ Model loading failed")
+                        logger.error("✗ Model loading failed")
                         return 1
                 else:
-                    print("✗ Model manager not initialized")
+                    logger.error("✗ Model manager not initialized")
                     return 1
             
             elif args.model_command == 'info':
-                print("Model information:")
+                logger.info("Model information:")
                 if daemon._components.get('model_manager'):
                     model_manager = daemon._components['model_manager']
                     info = model_manager.get_model_info()
                     
-                    print(f"  Model available: {info.get('model_available', False)}")
-                    print(f"  Model type: {info.get('model_type', 'None')}")
-                    print(f"  Scaler type: {info.get('scaler_type', 'None')}")
-                    print(f"  Last load: {info.get('last_load_time', 'Never')}")
-                    print(f"  Load failures: {info.get('load_failures', 0)}")
-                    print(f"  Fallback in use: {info.get('fallback_in_use', False)}")
+                    logger.info(f"  Model available: {info.get('model_available', False)}")
+                    logger.info(f"  Model type: {info.get('model_type', 'None')}")
+                    logger.info(f"  Scaler type: {info.get('scaler_type', 'None')}")
+                    logger.info(f"  Last load: {info.get('last_load_time', 'Never')}")
+                    logger.info(f"  Load failures: {info.get('load_failures', 0)}")
+                    logger.info(f"  Fallback in use: {info.get('fallback_in_use', False)}")
                 else:
-                    print("✗ Model manager not initialized")
+                    logger.error("✗ Model manager not initialized")
                     return 1
             
             return 0
             
         except Exception as e:
-            print(f"Model command failed: {e}")
+            logger.error(f"Model command failed: {e}")
             return 1
     
     def _cmd_blacklist(self, args) -> int:
@@ -864,27 +874,28 @@ Examples:
             daemon = self._load_daemon(args.config)
             
             if not args.blacklist_command:
-                print("Blacklist subcommand required")
+                logger.error("Blacklist subcommand required")
                 return 1
             
             if args.blacklist_command == 'list':
                 if daemon._components.get('blacklist_manager'):
                     blacklist_manager = daemon._components['blacklist_manager']
-                    entries = blacklist_manager.get_blacklist_entries(
+                    # Consume generator
+                    entries = list(blacklist_manager.get_blacklist_entries(
                         active_only=args.active_only,
                         risk_level=args.risk_level
-                    )
+                    ))
                     
                     if args.json:
-                        print(json.dumps(entries, indent=2, default=str))
+                        logger.info("Blacklist entries", extra={'entries': entries})
                     else:
-                        print(f"Blacklist entries ({len(entries)} total):")
+                        logger.info(f"Blacklist entries ({len(entries)} total):")
                         for entry in entries:
                             status = "ACTIVE" if entry['is_active'] else "INACTIVE"
                             expires = f" (expires: {entry['expires_at']})" if entry['expires_at'] else ""
-                            print(f"  {entry['ip_address']} - {entry['reason']} [{entry['risk_level']}] {status}{expires}")
+                            logger.info(f"  {entry['ip_address']} - {entry['reason']} [{entry['risk_level']}] {status}{expires}")
                 else:
-                    print("✗ Blacklist manager not initialized")
+                    logger.error("✗ Blacklist manager not initialized")
                     return 1
             
             elif args.blacklist_command == 'add':
@@ -899,12 +910,12 @@ Examples:
                     )
                     
                     if success:
-                        print(f"✓ Added {args.ip_address} to blacklist")
+                        logger.info(f"✓ Added {args.ip_address} to blacklist")
                     else:
-                        print(f"✗ Failed to add {args.ip_address} to blacklist")
+                        logger.error(f"✗ Failed to add {args.ip_address} to blacklist")
                         return 1
                 else:
-                    print("✗ Blacklist manager not initialized")
+                    logger.error("✗ Blacklist manager not initialized")
                     return 1
             
             elif args.blacklist_command == 'remove':
@@ -916,18 +927,18 @@ Examples:
                     )
                     
                     if success:
-                        print(f"✓ Removed {args.ip_address} from blacklist")
+                        logger.info(f"✓ Removed {args.ip_address} from blacklist")
                     else:
-                        print(f"✗ Failed to remove {args.ip_address} from blacklist")
+                        logger.error(f"✗ Failed to remove {args.ip_address} from blacklist")
                         return 1
                 else:
-                    print("✗ Blacklist manager not initialized")
+                    logger.error("✗ Blacklist manager not initialized")
                     return 1
             
             return 0
             
         except Exception as e:
-            print(f"Blacklist command failed: {e}")
+            logger.error(f"Blacklist command failed: {e}")
             return 1
 
     def _cmd_feedback(self, args) -> int:
@@ -940,7 +951,7 @@ Examples:
             Exit code
         """
         if not args.false_positive:
-            print("Error: --false-positive <IP> is required")
+            logger.error("Error: --false-positive <IP> is required")
             return 1
 
         try:
@@ -956,7 +967,7 @@ Examples:
                 )
 
                 if success:
-                    print(f"✓ Reported {args.false_positive} as false positive (trusted)")
+                    logger.info(f"✓ Reported {args.false_positive} as false positive (trusted)")
 
                     # 2. Remove from blacklist if present
                     if daemon._components.get('blacklist_manager'):
@@ -967,29 +978,141 @@ Examples:
                                 source="feedback_correction"
                             )
                             if rm_success:
-                                print(f"✓ Removed {args.false_positive} from blacklist")
+                                logger.info(f"✓ Removed {args.false_positive} from blacklist")
                             else:
-                                print(f"⚠ Could not remove {args.false_positive} from blacklist")
+                                logger.warning(f"⚠ Could not remove {args.false_positive} from blacklist")
 
                     # 3. Trigger incremental retrain
                     trigger_success = feedback_manager.trigger_retrain()
                     if trigger_success:
-                        print("✓ Triggered incremental model retraining")
+                        logger.info("✓ Triggered incremental model retraining")
                     else:
-                        print("✗ Failed to trigger retraining")
+                        logger.error("✗ Failed to trigger retraining")
 
                     return 0
                 else:
-                    print("✗ Failed to report false positive")
+                    logger.error("✗ Failed to report false positive")
                     return 1
             else:
-                print("✗ Feedback manager not initialized")
+                logger.error("✗ Feedback manager not initialized")
                 return 1
 
         except Exception as e:
-            print(f"Feedback command failed: {e}")
+            logger.error(f"Feedback command failed: {e}")
             return 1
     
+    def _get_daemon_status(self, config) -> Dict[str, Any]:
+        """Get daemon status without loading heavy components.
+
+        Args:
+            config: Aegis configuration object
+
+        Returns:
+            Status dictionary
+        """
+        # Check if running
+        is_running = self._is_process_running(config.pid_file)
+
+        status = {
+            'health': {
+                'overall_health': 'unknown',
+                'service_info': {
+                    'is_running': is_running
+                },
+                'component_details': {}
+            },
+            'statistics': {},
+            'component_stats': {},  # Added for detailed stats
+            'config_summary': {}
+        }
+
+        if not is_running:
+            status['health']['overall_health'] = 'stopped'
+            return status
+
+        # Try to read stats file
+        stats_file = Path(config.stats_file)
+        if stats_file.exists():
+            try:
+                with open(stats_file, 'r') as f:
+                    file_stats = json.load(f)
+
+                daemon_stats = file_stats.get('daemon_stats', {})
+                component_stats = file_stats.get('component_stats', {})
+
+                status['statistics'] = daemon_stats
+                status['component_stats'] = component_stats
+                status['config_summary'] = file_stats.get('config_summary', {})
+
+                # Reconstruct health info
+                start_time = daemon_stats.get('service_start_time')
+                if start_time:
+                    status['health']['service_info']['start_time'] = start_time
+                    try:
+                        start_dt = datetime.fromisoformat(start_time)
+                        uptime = (datetime.now() - start_dt).total_seconds()
+                        status['health']['service_info']['uptime_seconds'] = uptime
+                    except Exception:
+                        pass
+
+                # Dry run
+                dry_run_end = daemon_stats.get('dry_run_end_time')
+                if dry_run_end:
+                    try:
+                        end_dt = datetime.fromisoformat(dry_run_end)
+                        remaining = (end_dt - datetime.now()).total_seconds() / (24 * 3600)
+                        status['health']['service_info']['dry_run_remaining_days'] = max(0, remaining)
+                    except Exception:
+                        pass
+
+                # Calculate healthy components approximation
+                components_healthy = 0
+                total_components = 0
+
+                if 'model_manager' in component_stats:
+                    total_components += 1
+                    info = component_stats['model_manager']
+                    is_available = info.get('model_available', False)
+                    if is_available:
+                        components_healthy += 1
+                    status['health']['component_details']['model_manager'] = {
+                        'healthy': is_available,
+                        'model_info': info
+                    }
+
+                if 'blacklist_manager' in component_stats:
+                    total_components += 1
+                    components_healthy += 1  # Assume healthy if stats exist
+                    status['health']['component_details']['blacklist_manager'] = {
+                        'healthy': True,
+                        'stats': component_stats['blacklist_manager']
+                    }
+
+                if 'prediction_engine' in component_stats:
+                    total_components += 1
+                    components_healthy += 1  # Assume healthy if stats exist
+                    status['health']['component_details']['prediction_engine'] = {
+                        'healthy': True,
+                        'stats': component_stats['prediction_engine']
+                    }
+
+                status['health']['components_healthy'] = components_healthy
+                status['health']['total_components'] = total_components
+
+                if total_components > 0:
+                    health_ratio = components_healthy / total_components
+                    if health_ratio >= 0.8:
+                        status['health']['overall_health'] = 'healthy'
+                    elif health_ratio >= 0.5:
+                        status['health']['overall_health'] = 'degraded'
+                    else:
+                        status['health']['overall_health'] = 'unhealthy'
+
+            except Exception as e:
+                logger.warning(f"Failed to read stats file: {e}")
+
+        return status
+
     def _is_process_running(self, pid_file: str) -> bool:
         """Check if process is running based on PID file.
         
@@ -1025,7 +1148,7 @@ Examples:
                     pid = int(f.read().strip())
                 
                 os.kill(pid, signal.SIGKILL)
-                print(f"Force killed process {pid}")
+                logger.warning(f"Force killed process {pid}")
                 
                 # Remove PID file
                 Path(pid_file).unlink()
@@ -1042,8 +1165,8 @@ Examples:
         health = status.get('health', {})
         daemon_stats = status.get('statistics', {})
         
-        print("Aegis Daemon Status")
-        print("==================")
+        logger.info("Aegis Daemon Status")
+        logger.info("==================")
         
         overall_health = health.get('overall_health', 'unknown')
         health_icons = {
@@ -1054,37 +1177,37 @@ Examples:
         }
         icon = health_icons.get(overall_health, '?')
         
-        print(f"Overall Health: {icon} {overall_health.upper()}")
+        logger.info(f"Overall Health: {icon} {overall_health.upper()}")
         
         service_info = health.get('service_info', {})
         is_running = service_info.get('is_running', False)
         running_icon = '✓' if is_running else '✗'
         
-        print(f"Service Status: {running_icon} {'RUNNING' if is_running else 'STOPPED'}")
+        logger.info(f"Service Status: {running_icon} {'RUNNING' if is_running else 'STOPPED'}")
         
         if service_info.get('start_time'):
-            print(f"Start Time: {service_info['start_time']}")
+            logger.info(f"Start Time: {service_info['start_time']}")
         
         if service_info.get('uptime_seconds'):
             uptime = service_info['uptime_seconds']
             hours = int(uptime // 3600)
             minutes = int((uptime % 3600) // 60)
-            print(f"Uptime: {hours}h {minutes}m")
+            logger.info(f"Uptime: {hours}h {minutes}m")
         
         if service_info.get('dry_run_remaining_days') is not None:
             remaining = service_info['dry_run_remaining_days']
             if remaining > 0:
-                print(f"Dry Run: {remaining:.1f} days remaining")
+                logger.info(f"Dry Run: {remaining:.1f} days remaining")
             else:
-                print("Dry Run: EXPIRED (enforcement active)")
+                logger.info("Dry Run: EXPIRED (enforcement active)")
         
         components = health.get('component_details', {})
-        print(f"\\nComponents ({health.get('components_healthy', 0)}/{health.get('total_components', 0)} healthy):")
+        logger.info(f"\\nComponents ({health.get('components_healthy', 0)}/{health.get('total_components', 0)} healthy):")
         
         for name, details in components.items():
             healthy = details.get('healthy', False)
             icon = '✓' if healthy else '✗'
-            print(f"  {icon} {name}")
+            logger.info(f"  {icon} {name}")
     
     def _print_health(self, health: Dict[str, Any]) -> None:
         """Print formatted health information.
@@ -1092,28 +1215,28 @@ Examples:
         Args:
             health: Health dictionary
         """
-        print("Aegis Health Report")
-        print("===================")
+        logger.info("Aegis Health Report")
+        logger.info("===================")
         
         overall = health.get('overall_health', 'unknown')
-        print(f"Overall Health: {overall.upper()}")
+        logger.info(f"Overall Health: {overall.upper()}")
         
         service_info = health.get('service_info', {})
         if service_info:
-            print("\\nService Information:")
+            logger.info("\\nService Information:")
             for key, value in service_info.items():
-                print(f"  {key}: {value}")
+                logger.info(f"  {key}: {value}")
         
         components = health.get('component_details', {})
         if components:
-            print("\\nComponent Details:")
+            logger.info("\\nComponent Details:")
             for name, details in components.items():
-                print(f"  {name}:")
+                logger.info(f"  {name}:")
                 for key, value in details.items():
-                    print(f"    {key}: {value}")
+                    logger.info(f"    {key}: {value}")
         
         if health.get('error'):
-            print(f"\\nError: {health['error']}")
+            logger.info(f"\\nError: {health['error']}")
     
     def _print_detailed_stats(self, status: Dict[str, Any]) -> None:
         """Print detailed statistics.
@@ -1121,23 +1244,23 @@ Examples:
         Args:
             status: Status dictionary
         """
-        print("Aegis Detailed Statistics")
-        print("=========================")
+        logger.info("Aegis Detailed Statistics")
+        logger.info("=========================")
         
         daemon_stats = status.get('statistics', {})
         component_stats = status.get('component_stats', {})
         
         if daemon_stats:
-            print("\\nDaemon Statistics:")
+            logger.info("\\nDaemon Statistics:")
             for key, value in daemon_stats.items():
-                print(f"  {key}: {value}")
+                logger.info(f"  {key}: {value}")
         
         if component_stats:
-            print("\\nComponent Statistics:")
+            logger.info("\\nComponent Statistics:")
             for component, stats in component_stats.items():
-                print(f"  {component}:")
+                logger.info(f"  {component}:")
                 for key, value in stats.items():
-                    print(f"    {key}: {value}")
+                    logger.info(f"    {key}: {value}")
 
 
 def main() -> int:

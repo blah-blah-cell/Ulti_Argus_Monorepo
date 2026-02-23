@@ -2,9 +2,9 @@ use crate::engine::protocol::AppId;
 use async_trait::async_trait;
 use aya::maps::{HashMap, MapData};
 use common::{FlowMetadata, TokenBucket};
-use log::info;
 use lru::LruCache;
 use redis::AsyncCommands;
+use tracing::info;
 use serde::Serialize;
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
@@ -117,7 +117,12 @@ impl PolicyEngine {
         let ip_str = ip_addr.to_string();
 
         let (risk, action_desc) = if score > 95 {
-            // Check cache first
+            // Check cache first to avoid redundant syscalls.
+            // Note: If an external agent (Python enforcer) removes the IP from the blocklist,
+            // this cache might prevent immediate re-blocking until eviction.
+            // However, since we re-assess risk on every packet, if the IP continues to be malicious,
+            // it will eventually be re-blocked.
+            // Map updates use BPF_ANY (atomic overwrite), so concurrent updates are safe.
             let mut cache = self.blocked_cache.lock().unwrap();
             if !cache.contains(&flow.src_ip) {
                 // Block: Value 1

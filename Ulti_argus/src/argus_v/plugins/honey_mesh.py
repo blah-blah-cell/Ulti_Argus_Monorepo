@@ -1,6 +1,7 @@
-from src.argus_plugins.manager import ArgusPlugin
 import logging
-import time
+
+from src.argus_plugins.manager import ArgusPlugin
+
 
 class HoneyMesh(ArgusPlugin):
     """

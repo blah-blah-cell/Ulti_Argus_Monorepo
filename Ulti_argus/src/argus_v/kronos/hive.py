@@ -16,7 +16,7 @@ can import them without changes when the Hive is eventually built.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from ..oracle_core.logging import log_event
 

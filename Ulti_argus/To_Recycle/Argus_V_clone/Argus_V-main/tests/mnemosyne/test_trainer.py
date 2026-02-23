@@ -1,6 +1,5 @@
 """Unit tests for mnemosyne trainer module."""
 
-import pickle
 from pathlib import Path
 from unittest.mock import Mock, patch
 

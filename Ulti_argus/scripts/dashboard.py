@@ -1,8 +1,6 @@
-import time
-import sys
 import os
 import random
-import threading
+import time
 
 # ANSI Colors
 RED = "\033[91m"
@@ -103,7 +101,7 @@ def main():
             print(f"THREATS BLOCKED  : {threats_blocked}")
             print("-" * 50)
             
-            print(f"LIVE THREAT SCORES (ANOMALY):")
+            print("LIVE THREAT SCORES (ANOMALY):")
             print(f"INBOUND LOAD: {draw_bar(last_score)}")
             
             # History Visualization (Fake scrolling graph)
