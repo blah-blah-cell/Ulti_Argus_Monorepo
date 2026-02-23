@@ -14,12 +14,15 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..oracle_core.logging import configure_logging
 from .config import load_aegis_config
-from .daemon import AegisDaemon
+
+if TYPE_CHECKING:
+    from .daemon import AegisDaemon
 
 
 class AegisCLI:
@@ -27,7 +30,7 @@ class AegisCLI:
     
     def __init__(self):
         """Initialize CLI interface."""
-        self.daemon = None
+        self.daemon: Optional["AegisDaemon"] = None
     
     def setup_logging(self, verbose: bool = False) -> None:
         """Set up logging for CLI operations.
@@ -392,7 +395,7 @@ Examples:
             print(f"Command failed: {e}", file=sys.stderr)
             return 1
     
-    def _load_daemon(self, config_path: str) -> AegisDaemon:
+    def _load_daemon(self, config_path: str) -> "AegisDaemon":
         """Load and initialize daemon.
         
         Args:
@@ -406,6 +409,9 @@ Examples:
             if not Path(config_path).exists():
                 raise FileNotFoundError(f"Configuration file not found: {config_path}")
             
+            # Import daemon locally to avoid heavy dependencies on CLI load
+            from .daemon import AegisDaemon
+
             # Load daemon (but don't start it yet)
             daemon = AegisDaemon(config_path)
             return daemon
@@ -488,12 +494,13 @@ Examples:
         print("Stopping Aegis daemon...")
         
         try:
-            daemon = self._load_daemon(args.config)
+            # Load config directly to get PID file
+            config = load_aegis_config(args.config)
+            pid_file = config.pid_file
             
             # Try graceful stop first
             if not args.force:
                 # Check if PID file exists and try to stop gracefully
-                pid_file = daemon.config.pid_file
                 if Path(pid_file).exists():
                     try:
                         with open(pid_file, 'r') as f:
@@ -519,7 +526,7 @@ Examples:
             
             # Force stop
             if args.force:
-                self._force_stop_daemon(daemon.config.pid_file)
+                self._force_stop_daemon(pid_file)
             
             return 0
             
@@ -537,8 +544,8 @@ Examples:
             Exit code
         """
         try:
-            daemon = self._load_daemon(args.config)
-            status = daemon.get_status()
+            config = load_aegis_config(args.config)
+            status = self._get_daemon_status(config)
             
             if args.json:
                 print(json.dumps(status, indent=2, default=str))
@@ -561,8 +568,9 @@ Examples:
             Exit code
         """
         try:
-            daemon = self._load_daemon(args.config)
-            health = daemon.get_health_status()
+            config = load_aegis_config(args.config)
+            status = self._get_daemon_status(config)
+            health = status.get('health', {})
             
             if args.json:
                 print(json.dumps(health, indent=2, default=str))
@@ -785,8 +793,8 @@ Examples:
             Exit code
         """
         try:
-            daemon = self._load_daemon(args.config)
-            status = daemon.get_status()
+            config = load_aegis_config(args.config)
+            status = self._get_daemon_status(config)
             
             if args.json:
                 print(json.dumps(status, indent=2, default=str))
@@ -991,6 +999,118 @@ Examples:
             print(f"Feedback command failed: {e}")
             return 1
     
+    def _get_daemon_status(self, config) -> Dict[str, Any]:
+        """Get daemon status without loading heavy components.
+
+        Args:
+            config: Aegis configuration object
+
+        Returns:
+            Status dictionary
+        """
+        # Check if running
+        is_running = self._is_process_running(config.pid_file)
+
+        status = {
+            'health': {
+                'overall_health': 'unknown',
+                'service_info': {
+                    'is_running': is_running
+                },
+                'component_details': {}
+            },
+            'statistics': {},
+            'component_stats': {},  # Added for detailed stats
+            'config_summary': {}
+        }
+
+        if not is_running:
+            status['health']['overall_health'] = 'stopped'
+            return status
+
+        # Try to read stats file
+        stats_file = Path(config.stats_file)
+        if stats_file.exists():
+            try:
+                with open(stats_file, 'r') as f:
+                    file_stats = json.load(f)
+
+                daemon_stats = file_stats.get('daemon_stats', {})
+                component_stats = file_stats.get('component_stats', {})
+
+                status['statistics'] = daemon_stats
+                status['component_stats'] = component_stats
+                status['config_summary'] = file_stats.get('config_summary', {})
+
+                # Reconstruct health info
+                start_time = daemon_stats.get('service_start_time')
+                if start_time:
+                    status['health']['service_info']['start_time'] = start_time
+                    try:
+                        start_dt = datetime.fromisoformat(start_time)
+                        uptime = (datetime.now() - start_dt).total_seconds()
+                        status['health']['service_info']['uptime_seconds'] = uptime
+                    except Exception:
+                        pass
+
+                # Dry run
+                dry_run_end = daemon_stats.get('dry_run_end_time')
+                if dry_run_end:
+                    try:
+                        end_dt = datetime.fromisoformat(dry_run_end)
+                        remaining = (end_dt - datetime.now()).total_seconds() / (24 * 3600)
+                        status['health']['service_info']['dry_run_remaining_days'] = max(0, remaining)
+                    except Exception:
+                        pass
+
+                # Calculate healthy components approximation
+                components_healthy = 0
+                total_components = 0
+
+                if 'model_manager' in component_stats:
+                    total_components += 1
+                    info = component_stats['model_manager']
+                    is_available = info.get('model_available', False)
+                    if is_available:
+                        components_healthy += 1
+                    status['health']['component_details']['model_manager'] = {
+                        'healthy': is_available,
+                        'model_info': info
+                    }
+
+                if 'blacklist_manager' in component_stats:
+                    total_components += 1
+                    components_healthy += 1  # Assume healthy if stats exist
+                    status['health']['component_details']['blacklist_manager'] = {
+                        'healthy': True,
+                        'stats': component_stats['blacklist_manager']
+                    }
+
+                if 'prediction_engine' in component_stats:
+                    total_components += 1
+                    components_healthy += 1  # Assume healthy if stats exist
+                    status['health']['component_details']['prediction_engine'] = {
+                        'healthy': True,
+                        'stats': component_stats['prediction_engine']
+                    }
+
+                status['health']['components_healthy'] = components_healthy
+                status['health']['total_components'] = total_components
+
+                if total_components > 0:
+                    health_ratio = components_healthy / total_components
+                    if health_ratio >= 0.8:
+                        status['health']['overall_health'] = 'healthy'
+                    elif health_ratio >= 0.5:
+                        status['health']['overall_health'] = 'degraded'
+                    else:
+                        status['health']['overall_health'] = 'unhealthy'
+
+            except Exception as e:
+                print(f"Warning: Failed to read stats file: {e}", file=sys.stderr)
+
+        return status
+
     def _is_process_running(self, pid_file: str) -> bool:
         """Check if process is running based on PID file.
         
