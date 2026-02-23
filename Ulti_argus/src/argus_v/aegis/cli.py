@@ -870,10 +870,11 @@ Examples:
             if args.blacklist_command == 'list':
                 if daemon._components.get('blacklist_manager'):
                     blacklist_manager = daemon._components['blacklist_manager']
-                    entries = blacklist_manager.get_blacklist_entries(
+                    # Consume generator
+                    entries = list(blacklist_manager.get_blacklist_entries(
                         active_only=args.active_only,
                         risk_level=args.risk_level
-                    )
+                    ))
                     
                     if args.json:
                         print(json.dumps(entries, indent=2, default=str))
