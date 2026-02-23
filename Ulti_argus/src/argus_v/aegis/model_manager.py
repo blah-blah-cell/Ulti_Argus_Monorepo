@@ -23,6 +23,7 @@ except ImportError:
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
 
 from ..oracle_core.logging import log_event
 
@@ -341,20 +342,8 @@ class ModelManager:
             mock_model = IsolationForest(random_state=42)
             mock_model.fit(np.random.randn(100, n_features))
 
-            class MockScaler:
-                mean_ = np.zeros(n_features)
-                scale_ = np.ones(n_features)
-
-                def transform(self, X):
-                    return X
-
-                def fit_transform(self, X):
-                    return X
-
-                def inverse_transform(self, X):
-                    return X
-
-            mock_scaler = MockScaler()
+            mock_scaler = StandardScaler()
+            mock_scaler.fit(np.random.randn(100, n_features))
             
             with open(local_model_path, 'wb') as f:
                 pickle.dump(mock_model, f)
@@ -843,17 +832,17 @@ class ModelManager:
             
             # Select and prepare features
             features_df = flows_df[required_cols].copy()
-            
-            # Convert to numeric, replacing non-numeric values with 0
-            for col in features_df.columns:
-                features_df[col] = pd.to_numeric(features_df[col], errors='coerce').fillna(0)
-            
-            # Handle categorical features
+
+            # Handle categorical features first
             if 'protocol' in features_df.columns:
                 # Convert protocol to numeric (TCP=1, UDP=2, ICMP=3, etc.)
                 protocol_map = {'TCP': 1, 'UDP': 2, 'ICMP': 3, 'OTHER': 0}
                 features_df['protocol'] = features_df['protocol'].map(protocol_map).fillna(0)
             
+            # Convert to numeric, replacing non-numeric values with 0
+            for col in features_df.columns:
+                features_df[col] = pd.to_numeric(features_df[col], errors='coerce').fillna(0)
+
             return features_df
             
         except Exception as e:
