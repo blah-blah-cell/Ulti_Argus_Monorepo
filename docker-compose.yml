@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  aegis-brain:
+    build: .
+    container_name: aegis-brain
+    ports:
+      - "8081:8081"  # FastAPI
+      - "9090:9090"  # Prometheus Metrics
+    environment:
+      - ARGUS_CONFIG_FILE=/etc/argus/aegis.yaml
+    volumes:
+      - aegis-data:/var/lib/argus
+      # Uncomment to mount a custom configuration file
+      # - ./aegis-config.yaml:/etc/argus/aegis.yaml
+    networks:
+      - argus-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: argus-prometheus
+    ports:
+      - "9091:9090" # Expose Prometheus UI on 9091 to avoid conflict with Aegis metrics
+    networks:
+      - argus-net
+    volumes:
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: argus-grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - argus-net
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+networks:
+  argus-net:
+    driver: bridge
+
+volumes:
+  aegis-data:
+  prometheus-data:
+  grafana-data:
