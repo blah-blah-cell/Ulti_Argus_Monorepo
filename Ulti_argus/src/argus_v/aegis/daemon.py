@@ -785,9 +785,15 @@ class AegisDaemon:
         except Exception as e:
             return {
                 'overall_health': 'error',
+                'components_healthy': 0,
+                'total_components': 0,
+                'component_details': {},
                 'error': str(e),
                 'service_info': {
-                    'is_running': self._running
+                    'is_running': self._running,
+                    'start_time': self._start_time.isoformat() if self._start_time else None,
+                    'uptime_seconds': 0,
+                    'dry_run_remaining_days': 0.0
                 }
             }
     
