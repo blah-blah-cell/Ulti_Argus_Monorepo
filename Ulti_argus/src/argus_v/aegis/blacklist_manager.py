@@ -239,7 +239,8 @@ class BlacklistManager:
             # Calculate expiry time
             expires_at = None
             if ttl_hours:
-                expires_at = datetime.now() + timedelta(hours=ttl_hours)
+                from datetime import timezone
+                expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
             
             # Anonymize IP for storage (if needed)
             if self.anonymizer:
