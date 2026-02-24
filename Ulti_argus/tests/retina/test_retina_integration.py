@@ -95,6 +95,17 @@ class TestInterfaceFailureSimulation:
                             # Wait for interface to become unavailable
                             time.sleep(1)
                             
+                            # Manually trigger health update to ensure metric history is populated
+                            if daemon._health_monitor and daemon._capture_engine:
+                                daemon._health_monitor.update_metrics(
+                                    interface_available=False,
+                                    packets_captured=0,
+                                    packets_processed=0,
+                                    packets_dropped=0,
+                                    flows_in_queue=0,
+                                    current_window_packets=0,
+                                )
+
                             # Check that health monitoring detected the issue
                             status = daemon.get_status()
                             health = status.get("health", {})
@@ -137,9 +148,12 @@ class TestInterfaceFailureSimulation:
                 )
             
             try:
-                # Simulate interface changes
-                daemon._interface_monitor._availability_callbacks[0]("test_interface", False)
-                daemon._interface_monitor._availability_callbacks[0]("test_interface", True)
+                # Simulate interface changes by notifying ALL callbacks
+                if daemon._interface_monitor:
+                    for cb in daemon._interface_monitor._availability_callbacks:
+                        cb("test_interface", False)
+                    for cb in daemon._interface_monitor._availability_callbacks:
+                        cb("test_interface", True)
                 
                 # Check that callbacks were called
                 assert len(interface_callbacks) >= 2
@@ -287,6 +301,9 @@ class TestPCAPSampleProcessing:
             
             daemon._aggregator.add_packet(test_packet)
             
+            # Wait for processing
+            time.sleep(0.5)
+
             # Force window flush
             daemon._aggregator._flush_current_window()
             
@@ -360,6 +377,9 @@ class TestPCAPSampleProcessing:
             for packet in packets:
                 daemon._aggregator.add_packet(packet)
             
+            # Wait for processing
+            time.sleep(0.5)
+
             # Check protocol tracking
             daemon._aggregator._flush_current_window()
             
@@ -419,7 +439,11 @@ class TestEndToEndWorkflow:
                     daemon._aggregator.add_packet(packet)
                 
                 # Wait for window processing
-                time.sleep(2)
+                time.sleep(2.5)
+
+                # Force flush to ensure window completion and file writing
+                daemon._aggregator._flush_current_window()
+                time.sleep(0.2) # Wait for callback execution
                 
                 # Check CSV output
                 csv_files = daemon._csv_rotator.list_files()

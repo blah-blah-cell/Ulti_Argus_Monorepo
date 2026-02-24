@@ -190,6 +190,13 @@ class HealthMonitor:
             if avg_drop_rate > self.max_drop_rate_percent:
                 status = "critical"
             
+            # Check active alerts for critical issues
+            active_alerts = [a for a in self._alert_history if not a.resolved]
+            if any(a.severity == "critical" for a in active_alerts):
+                status = "critical"
+            elif any(a.severity == "warning" for a in active_alerts) and status == "healthy":
+                status = "warning"
+
             return {
                 "status": status,
                 "timestamp": time.time(),

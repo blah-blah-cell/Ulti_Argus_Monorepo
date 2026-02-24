@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from ..oracle_core.config import expand_env_str
 from ..oracle_core.validation import (
     ValidationError,
     ValidationIssue,
@@ -57,7 +58,9 @@ class MnemosyneFirebaseConfig:
             get_required(data, "service_account_path", path=path),
             path=f"{path}.service_account_path",
         )
-        service_account_path = os.path.expanduser(service_account_path_raw)
+        service_account_path = os.path.expanduser(
+            expand_env_str(service_account_path_raw, env=env, path=f"{path}.service_account_path")
+        )
         
         training_data_path = require_non_empty_str(
             get_optional(data, "training_data_path", "flows/training"),

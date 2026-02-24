@@ -28,7 +28,9 @@ runtime:
             "ARGUS_BLACKLIST_JSON_PATH": "/tmp/custom/blacklist.json",
             "ARGUS_FEEDBACK_DIR": "/tmp/custom/feedback",
             "ARGUS_RETRAIN_FLAG_FILE": "/tmp/custom/trigger_retrain",
-            "ARGUS_EMERGENCY_STOP_FILE": "/tmp/custom/emergency.stop"
+            "ARGUS_EMERGENCY_STOP_FILE": "/tmp/custom/emergency.stop",
+            "ARGUS_ANONYMIZATION_SALT": "test-salt",
+            "AEGIS_SALT": "test-salt"
         }
 
         for k, v in env.items():
@@ -69,6 +71,10 @@ runtime:
         monkeypatch.delenv("ARGUS_FEEDBACK_DIR", raising=False)
         monkeypatch.delenv("ARGUS_RETRAIN_FLAG_FILE", raising=False)
         monkeypatch.delenv("ARGUS_EMERGENCY_STOP_FILE", raising=False)
+
+        # Set required salt
+        monkeypatch.setenv("ARGUS_ANONYMIZATION_SALT", "test-salt")
+        monkeypatch.setenv("AEGIS_SALT", "test-salt")
 
         config = load_aegis_config(config_path)
 

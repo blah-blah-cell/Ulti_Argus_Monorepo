@@ -178,6 +178,12 @@ class CaptureEngine:
         """Start packet capture using pcapy fallback."""
         def capture_worker():
             try:
+                if not HAS_PCAPY:
+                    logger.warning("Pcapy not available. Running in mock capture mode.")
+                    while not self._stop_event.is_set():
+                        time.sleep(0.1)
+                    return
+
                 logger.info(f"Starting pcapy capture on {self.interface}")
                 
                 # Open capture handle

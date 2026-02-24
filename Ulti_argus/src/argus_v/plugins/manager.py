@@ -24,19 +24,22 @@ class ArgusPlugin(ABC):
         """Called when plugin is loaded"""
         pass
 
-    @abstractmethod
-    def on_packet(self, flow_data):
+    def on_packet(self, flow_data):  # noqa: B027
         """Optional: Inspect raw packet data (called by Aegis Core)"""
         # Default implementation does nothing
+        pass
 
-    @abstractmethod
-    def on_payload(self, content):
+    def on_payload(self, content):  # noqa: B027
         """Optional: Inspect decrypted payload (called by Aegis Proxy/Mnemosyne)"""
         # Default implementation does nothing
+        pass
 
 class PluginManager:
-    def __init__(self, plugin_dir="d:/Argus_AI/src/argus_plugins"):
-        self.plugin_dir = plugin_dir
+    def __init__(self, plugin_dir=None):
+        if plugin_dir is None:
+            self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        else:
+            self.plugin_dir = plugin_dir
         self.plugins = []
         self.stats = {} # Live activity tracking
         self.logger = logging.getLogger("PluginManager")
@@ -53,7 +56,7 @@ class PluginManager:
             if filename.endswith(".py") and not filename.startswith("__") and filename != "manager.py":
                 module_name = filename[:-3]
                 try:
-                    module = importlib.import_module(f"src.argus_plugins.{module_name}")
+                    module = importlib.import_module(f"argus_v.plugins.{module_name}")
                     for attr_name in dir(module):
                         attr = getattr(module, attr_name)
                         if isinstance(attr, type) and issubclass(attr, ArgusPlugin) and attr is not ArgusPlugin:

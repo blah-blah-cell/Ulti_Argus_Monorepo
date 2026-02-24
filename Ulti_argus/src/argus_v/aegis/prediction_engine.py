@@ -188,6 +188,7 @@ class PredictionEngine:
         self._ipc_thread = None
         self._csv_queue = Queue()
         self._processed_files = set()
+        self._model_lock = threading.Lock()
 
         # IPC batching
         self.ipc_batch_queue = []

@@ -176,7 +176,10 @@ def configure_logging_from_args(args) -> logging.Logger:
             # Create file handler
             file_handler = logging.FileHandler(str(log_path))
             file_handler.name = "argus_file"
-            file_handler.setFormatter(JsonFormatter())
+            file_handler.setFormatter(JsonFormatter(
+                '%(levelname)s %(name)s %(message)s',
+                rename_fields={'levelname': 'level', 'name': 'logger'}
+            ))
             file_handler.addFilter(PrivacyFilter())
 
             # Add to root logger to capture all logs

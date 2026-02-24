@@ -1,7 +1,7 @@
 """Unit tests for mnemosyne pipeline orchestration."""
 
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
 import pytest
@@ -14,7 +14,10 @@ def mock_firebase_admin():
     """Mock firebase_admin dependencies."""
     with patch("argus_v.mnemosyne.artifact_manager.credentials.Certificate"), \
          patch("argus_v.mnemosyne.data_loader.credentials.Certificate"), \
-         patch("firebase_admin.credentials.Certificate"):
+         patch("firebase_admin.credentials.Certificate"), \
+         patch("firebase_admin.initialize_app"), \
+         patch("argus_v.mnemosyne.artifact_manager.storage"), \
+         patch("argus_v.mnemosyne.data_loader.storage"):
         yield
 
 @pytest.fixture
@@ -226,7 +229,8 @@ class TestMnemosynePipeline:
     @patch('argus_v.mnemosyne.pipeline.FlowPreprocessor')
     @patch('argus_v.mnemosyne.pipeline.IsolationForestTrainer')
     @patch('argus_v.mnemosyne.pipeline.ArtifactManager')
-    def test_validate_setup_success(self, mock_artifact_manager, mock_trainer,
+    @patch('argus_v.mnemosyne.pipeline.Path')
+    def test_validate_setup_success(self, mock_path, mock_artifact_manager, mock_trainer,
                                   mock_preprocessor, mock_data_loader, complete_config):
         """Test successful setup validation."""
         # Setup mocks
@@ -239,6 +243,11 @@ class TestMnemosynePipeline:
         mock_data_loader.return_value = mock_data_loader_instance
         mock_artifact_manager.return_value = mock_artifact_manager_instance
         
+        # Configure Path mock
+        mock_path_instance = Mock()
+        mock_path_instance.exists.return_value = True
+        mock_path.return_value = mock_path_instance
+
         with patch('argus_v.mnemosyne.pipeline.tempfile.mkdtemp', return_value='/tmp/mnemosyne_test'):
             pipeline = MnemosynePipeline(complete_config)
             
@@ -252,13 +261,17 @@ class TestMnemosynePipeline:
     
     @patch('argus_v.mnemosyne.pipeline.FirebaseDataLoader')
     @patch('argus_v.mnemosyne.pipeline.tempfile.mkdtemp')
-    def test_validate_setup_missing_service_account(self, mock_mkdtemp, mock_data_loader, complete_config):
+    @patch('os.path.exists')
+    def test_validate_setup_missing_service_account(self, mock_exists, mock_mkdtemp, mock_data_loader, complete_config):
         """Test validation with missing service account file."""
         mock_mkdtemp.return_value = '/tmp/mnemosyne_test'
         
         # Set service account path to non-existent file
         complete_config.firebase.service_account_path = "/nonexistent/path.json"
         
+        # Configure os.path.exists to return False
+        mock_exists.return_value = False
+
         pipeline = MnemosynePipeline(complete_config)
         validation = pipeline.validate_setup()
         
@@ -309,23 +322,25 @@ class TestMnemosynePipeline:
         # Setup mocks
         mock_data_loader_instance = Mock()
         mock_artifact_manager_instance = Mock()
-        
+
         mock_data_loader.return_value = mock_data_loader_instance
         mock_artifact_manager.return_value = mock_artifact_manager_instance
-        
+
         with patch('argus_v.mnemosyne.pipeline.tempfile.mkdtemp', return_value='/tmp/mnemosyne_test'):
-            pipeline = MnemosynePipeline(complete_config)
-            
-            # Mock temporary directory
-            pipeline._temp_dir = Mock()
-            pipeline._temp_dir.exists.return_value = True
-            pipeline._temp_dir.__str__.return_value = "/tmp/mnemosyne_test"
-            
-            # Cleanup should not raise exception
-            pipeline.cleanup()
-            
-            # Verify cleanup was called
-            mock_shutil.rmtree.assert_called_once_with("/tmp/mnemosyne_test")
+            # Patch Path in pipeline scope to control exists() check
+            with patch('argus_v.mnemosyne.pipeline.Path') as mock_path:
+                mock_path_instance = MagicMock()
+                mock_path_instance.exists.return_value = True
+                mock_path_instance.__str__.return_value = "/tmp/mnemosyne_test"
+                mock_path.return_value = mock_path_instance
+
+                pipeline = MnemosynePipeline(complete_config)
+
+                # Cleanup should not raise exception
+                pipeline.cleanup()
+
+                # Verify cleanup was called
+                mock_shutil.rmtree.assert_called_once()
     
     def test_context_manager(self, complete_config):
         """Test pipeline as context manager."""

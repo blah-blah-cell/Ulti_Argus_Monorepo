@@ -132,6 +132,12 @@ class RetinaDaemon:
     
     def get_status(self) -> dict:
         """Get current daemon status."""
+        # Sync aggregate stats
+        if self._aggregator:
+            agg_stats = self._aggregator.get_stats()
+            self._stats["total_packets_processed"] = agg_stats.get("packets_processed", 0)
+            self._stats["total_packets_dropped"] = agg_stats.get("packets_dropped", 0)
+
         status = {
             "running": self._running,
             "config": {

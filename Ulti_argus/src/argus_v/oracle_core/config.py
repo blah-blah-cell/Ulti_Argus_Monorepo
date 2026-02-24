@@ -21,10 +21,23 @@ from .validation import (
     require_safe_name,
 )
 
+__all__ = [
+    "ArgusConfig",
+    "BlacklistConfig",
+    "FirebaseConfig",
+    "GitHubConfig",
+    "InterfaceToggle",
+    "RuntimeConfig",
+    "SamplingConfig",
+    "load_config",
+    "require_safe_name",
+    "expand_env_str",
+]
+
 _ENV_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
 
 
-def _expand_env_str(value: str, *, env: Mapping[str, str], path: str) -> str:
+def expand_env_str(value: str, *, env: Mapping[str, str], path: str) -> str:
     missing: set[str] = set()
 
     def repl(match: re.Match[str]) -> str:
@@ -120,7 +133,7 @@ class FirebaseConfig:
             get_required(data, "api_key", path=path),
             path=f"{path}.api_key",
         )
-        api_key = _expand_env_str(api_key_raw, env=env, path=f"{path}.api_key")
+        api_key = expand_env_str(api_key_raw, env=env, path=f"{path}.api_key")
 
         request_timeout_seconds = require_positive_int(
             get_optional(data, "request_timeout_seconds", 10),
@@ -158,7 +171,7 @@ class GitHubConfig:
             get_required(data, "token", path=path),
             path=f"{path}.token",
         )
-        token = _expand_env_str(token_raw, env=env, path=f"{path}.token")
+        token = expand_env_str(token_raw, env=env, path=f"{path}.token")
 
         user_agent = require_non_empty_str(
             get_optional(data, "user_agent", "argus-v"),

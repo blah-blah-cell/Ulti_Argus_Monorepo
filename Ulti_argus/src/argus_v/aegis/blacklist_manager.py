@@ -155,7 +155,7 @@ class BlacklistManager:
                         risk_level TEXT DEFAULT 'medium',
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         expires_at TIMESTAMP,
-                        is_active BOOLEAN DEFAULT TRUE,
+                        is_active BOOLEAN DEFAULT 1,
                         enforcement_action TEXT DEFAULT 'none',
                         hit_count INTEGER DEFAULT 0,
                         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -316,7 +316,7 @@ class BlacklistManager:
                 # Soft delete (mark as inactive)
                 cursor.execute("""
                     UPDATE blacklist 
-                    SET is_active = FALSE, last_seen = CURRENT_TIMESTAMP
+                    SET is_active = 0, last_seen = CURRENT_TIMESTAMP
                     WHERE ip_address = ? AND source = ?
                 """, (anonymized_ip, source))
                 
@@ -341,9 +341,6 @@ class BlacklistManager:
                 
                 # Clear lookup cache
                 self._check_db_status.cache_clear()
-                
-                # Clear lookup cache
-                self.is_blacklisted.cache_clear()
 
                 return True
                 
@@ -383,7 +380,7 @@ class BlacklistManager:
             cursor.execute("""
                 SELECT expires_at, is_active, risk_level
                 FROM blacklist
-                WHERE ip_address = ? AND is_active = TRUE
+                WHERE ip_address = ? AND is_active = 1
             """, (anonymized_ip,))
 
             row = cursor.fetchone()
@@ -438,7 +435,7 @@ class BlacklistManager:
                         cursor = conn.cursor()
                         cursor.execute("""
                             UPDATE blacklist 
-                            SET is_active = FALSE 
+                            SET is_active = 0
                             WHERE ip_address = ? AND expires_at < CURRENT_TIMESTAMP
                         """, (anonymized_ip,))
 
@@ -495,7 +492,7 @@ class BlacklistManager:
             params = []
 
             if active_only:
-                conditions.append("is_active = TRUE")
+                conditions.append("is_active = 1")
 
             if risk_level:
                 conditions.append("risk_level = ?")
@@ -608,10 +605,10 @@ class BlacklistManager:
                 
                 cursor.execute("""
                     UPDATE blacklist 
-                    SET is_active = FALSE 
+                    SET is_active = 0
                     WHERE expires_at IS NOT NULL 
                     AND expires_at < CURRENT_TIMESTAMP 
-                    AND is_active = TRUE
+                    AND is_active = 1
                 """)
                 
                 cleaned_count = cursor.rowcount
@@ -1022,12 +1019,12 @@ class BlacklistManager:
             cursor.execute("SELECT COUNT(*) FROM blacklist")
             self._stats['total_entries'] = cursor.fetchone()[0]
 
-            cursor.execute("SELECT COUNT(*) FROM blacklist WHERE is_active = TRUE")
+            cursor.execute("SELECT COUNT(*) FROM blacklist WHERE is_active = 1")
             self._stats['active_entries'] = cursor.fetchone()[0]
 
             cursor.execute("""
                 SELECT COUNT(*) FROM blacklist
-                WHERE is_active = FALSE
+                WHERE is_active = 0
                 AND expires_at IS NOT NULL
                 AND expires_at < CURRENT_TIMESTAMP
             """)

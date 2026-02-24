@@ -17,28 +17,6 @@ mock_firebase_admin = MagicMock()
 mock_daemon = MagicMock()
 mock_daemon_pidfile = MagicMock()
 
-# sys.modules['yaml'] = mock_yaml
-# sys.modules['scapy'] = mock_scapy
-# sys.modules['scapy.all'] = mock_scapy
-# sys.modules['pandas'] = mock_pandas
-# sys.modules['numpy'] = mock_numpy
-# sys.modules['sklearn'] = mock_sklearn
-# sys.modules['sklearn.ensemble'] = MagicMock()
-# sys.modules['sklearn.preprocessing'] = MagicMock()
-# sys.modules['skops'] = mock_skops
-# sys.modules['skops.io'] = MagicMock()
-# sys.modules['firebase_admin'] = mock_firebase_admin
-# sys.modules['daemon'] = mock_daemon
-# sys.modules['daemon.pidfile'] = mock_daemon_pidfile
-
-# Mock internal dependencies
-mock_aegis_daemon = MagicMock()
-# sys.modules['argus_v.aegis.daemon'] = mock_aegis_daemon
-mock_aegis_config = MagicMock()
-# sys.modules['argus_v.aegis.config'] = mock_aegis_config
-mock_oracle_logging = MagicMock()
-# sys.modules['argus_v.oracle_core.logging'] = mock_oracle_logging
-
 # Now import the module under test
 from argus_v.aegis.cli import AegisCLI
 
@@ -92,7 +70,7 @@ class TestAegisCLI:
         exit_code = cli.run(['start'])
         assert exit_code == 1
 
-    @patch('argus_v.aegis.cli.AegisDaemon')
+    @patch('argus_v.aegis.daemon.AegisDaemon')
     @patch('pathlib.Path.exists')
     def test_load_daemon(self, mock_exists, mock_daemon_cls, cli):
         mock_exists.return_value = True
@@ -143,12 +121,17 @@ class TestAegisCLI:
         assert exit_code == 0
         daemon_instance.start.assert_called()
 
+    @patch('argus_v.aegis.cli.load_aegis_config')
     @patch('argus_v.aegis.cli.AegisCLI._load_daemon')
     @patch('os.kill')
     @patch('pathlib.Path.exists')
-    def test_cmd_stop_graceful(self, mock_exists, mock_kill, mock_load_daemon, cli, mock_args):
+    def test_cmd_stop_graceful(self, mock_exists, mock_kill, mock_load_daemon, mock_load_config, cli, mock_args):
         mock_args.force = False
         mock_args.timeout = 1
+
+        config_mock = MagicMock()
+        config_mock.pid_file = '/var/run/aegis.pid'
+        mock_load_config.return_value = config_mock
 
         daemon_instance = MagicMock()
         daemon_instance.config.pid_file = '/var/run/aegis.pid'
@@ -166,10 +149,15 @@ class TestAegisCLI:
             # Ensure SIGTERM was sent
             mock_kill.assert_any_call(12345, signal.SIGTERM)
 
+    @patch('argus_v.aegis.cli.load_aegis_config')
     @patch('argus_v.aegis.cli.AegisCLI._load_daemon')
     @patch('argus_v.aegis.cli.AegisCLI._force_stop_daemon')
-    def test_cmd_stop_force(self, mock_force_stop, mock_load_daemon, cli, mock_args):
+    def test_cmd_stop_force(self, mock_force_stop, mock_load_daemon, mock_load_config, cli, mock_args):
         mock_args.force = True
+
+        config_mock = MagicMock()
+        config_mock.pid_file = '/var/run/aegis.pid'
+        mock_load_config.return_value = config_mock
 
         daemon_instance = MagicMock()
         daemon_instance.config.pid_file = '/var/run/aegis.pid'
@@ -180,29 +168,37 @@ class TestAegisCLI:
         assert exit_code == 0
         mock_force_stop.assert_called_with('/var/run/aegis.pid')
 
-    @patch('argus_v.aegis.cli.AegisCLI._load_daemon')
-    def test_cmd_status(self, mock_load_daemon, cli, mock_args):
+    @patch('argus_v.aegis.cli.load_aegis_config')
+    @patch('argus_v.aegis.cli.AegisCLI._get_daemon_status')
+    def test_cmd_status(self, mock_get_status, mock_load_config, cli, mock_args):
         mock_args.json = True
-        daemon_instance = MagicMock()
-        daemon_instance.get_status.return_value = {'status': 'ok'}
-        mock_load_daemon.return_value = daemon_instance
+
+        config_mock = MagicMock()
+        config_mock.pid_file = '/var/run/aegis.pid'
+        mock_load_config.return_value = config_mock
+
+        mock_get_status.return_value = {'status': 'ok'}
 
         with patch('sys.stdout'):
             exit_code = cli._cmd_status(mock_args)
             assert exit_code == 0
-            daemon_instance.get_status.assert_called()
+            mock_get_status.assert_called()
 
-    @patch('argus_v.aegis.cli.AegisCLI._load_daemon')
-    def test_cmd_health(self, mock_load_daemon, cli, mock_args):
+    @patch('argus_v.aegis.cli.load_aegis_config')
+    @patch('argus_v.aegis.cli.AegisCLI._get_daemon_status')
+    def test_cmd_health(self, mock_get_status, mock_load_config, cli, mock_args):
         mock_args.json = True
-        daemon_instance = MagicMock()
-        daemon_instance.get_health_status.return_value = {'health': 'ok'}
-        mock_load_daemon.return_value = daemon_instance
+
+        config_mock = MagicMock()
+        config_mock.pid_file = '/var/run/aegis.pid'
+        mock_load_config.return_value = config_mock
+
+        mock_get_status.return_value = {'health': 'ok'}
 
         with patch('sys.stdout'):
             exit_code = cli._cmd_health(mock_args)
             assert exit_code == 0
-            daemon_instance.get_health_status.assert_called()
+            mock_get_status.assert_called()
 
     @patch('argus_v.aegis.cli.load_aegis_config')
     @patch('pathlib.Path.exists')

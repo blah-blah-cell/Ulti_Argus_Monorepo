@@ -10,17 +10,17 @@ from argus_v.plugins.manager import PluginManager
 
 class TestArgusPlugins(unittest.TestCase):
     def setUp(self):
-        self.mgr = PluginManager(plugin_dir="d:/Argus_AI/src/argus_plugins")
+        self.mgr = PluginManager()
         self.mgr.discover_and_load()
 
     def test_pqc_scout(self):
         print("\n[TEST] Testing PQC Scout...")
         # Simulate a packet containing Kyber key exchange
-        payload = b"Start_TLS_Handshake_..._kyber_key_exchange_..."
+        payload = b"Start_TLS_Handshake_..._x25519_kyber768_..."
         results = self.mgr.run_on_payload(payload)
         
         self.assertIn("PQCScout", results)
-        self.assertEqual(results["PQCScout"]["alert"], "PQC_DETECTED")
+        self.assertEqual(results["PQCScout"]["alert"], "PQC_HANDSHAKE_DETECTED")
         print(f"[PASS] PQC Scout correctly flagged: {results['PQCScout']}")
 
     def test_dicom_inspector(self):
