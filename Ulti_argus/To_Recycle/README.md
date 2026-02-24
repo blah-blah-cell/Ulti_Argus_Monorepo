@@ -38,7 +38,7 @@ Argus_V is a specialized security stack designed specifically for NGOs operating
 Deploy Argus_V to your device:
 
 ```bash
-git clone https://github.com/Ojas-bb/Argus_V.git
+git clone https://github.com/blah-blah-cell/Ulti_Argus_Monorepo.git
 cd Argus_V
 sudo ./install.sh
 ```
@@ -69,7 +69,7 @@ sudo apt update && sudo apt upgrade -y
 ### 2. Clone the Repository
 Download the Argus_V source code:
 ```bash
-git clone https://github.com/Ojas-bb/Argus_V.git
+git clone https://github.com/blah-blah-cell/Ulti_Argus_Monorepo.git
 cd Argus_V
 ```
 

@@ -27,8 +27,8 @@ mocks = [
     'scapy.all',
 ]
 
-for module in mocks:
-    sys.modules[module] = MagicMock()
+# for module in mocks:
+#     sys.modules[module] = MagicMock()
 
 from argus_v.aegis.blacklist_manager import BlacklistManager
 from argus_v.aegis.config import EnforcementConfig

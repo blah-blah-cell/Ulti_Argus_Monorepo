@@ -44,7 +44,7 @@ CRON_ARGUS_UPDATE="/etc/cron.d/argus-v-update"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Repository settings (used when install.sh is run standalone)
-REPO_URL_DEFAULT="https://github.com/Ojas-bb/Argus_V.git"
+REPO_URL_DEFAULT="https://github.com/blah-blah-cell/Ulti_Argus_Monorepo.git"
 REPO_REF_DEFAULT="main"
 REPO_URL="${ARGUS_REPO_URL:-$REPO_URL_DEFAULT}"
 REPO_REF="${ARGUS_REPO_REF:-$REPO_REF_DEFAULT}"

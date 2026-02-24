@@ -351,7 +351,7 @@ All tests passing:
 
 ```bash
 # Download and extract release
-wget https://github.com/Ojas-bb/Argus_V/releases/download/v0.1.0/argus_v-v0.1.0.tar.gz
+wget https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/releases/download/v0.1.0/argus_v-v0.1.0.tar.gz
 tar xzf argus_v-v0.1.0.tar.gz
 cd argus_v-v0.1.0
 
@@ -366,7 +366,7 @@ sudo ./install.sh --non-interactive
 
 ```bash
 # Install from specific branch
-sudo ./install.sh --repo https://github.com/user/fork.git --ref develop
+sudo ./install.sh --repo https://github.com/blah-blah-cell/Ulti_Argus_Monorepo.git --ref develop
 
 # Skip dependency installation (for development)
 sudo ./install.sh --skip-dependencies

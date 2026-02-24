@@ -103,10 +103,10 @@ systemctl status argus-retina  # Should fail (not found)
 
 ```bash
 # Download release
-wget https://github.com/Ojas-bb/Argus_V/releases/download/v0.1.0/argus_v-v0.1.0.tar.gz
+wget https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/releases/download/v0.1.0/argus_v-v0.1.0.tar.gz
 
 # Verify checksums
-wget https://github.com/Ojas-bb/Argus_V/releases/download/v0.1.0/SHA256SUMS
+wget https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/releases/download/v0.1.0/SHA256SUMS
 sha256sum -c SHA256SUMS
 
 # Extract

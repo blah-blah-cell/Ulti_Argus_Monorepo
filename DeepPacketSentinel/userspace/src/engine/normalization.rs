@@ -3,12 +3,14 @@ use common::FlowMetadata;
 pub struct Normalizer;
 
 impl Normalizer {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self
     }
 
     /// Normalizes the payload into a float vector [0.0, 1.0] of fixed size 128.
     /// Bytes are scaled by 255.0.
+    #[allow(dead_code)]
     pub fn normalize(&self, flow: &FlowMetadata) -> Vec<f32> {
         flow.payload.iter().map(|&b| b as f32 / 255.0).collect()
     }

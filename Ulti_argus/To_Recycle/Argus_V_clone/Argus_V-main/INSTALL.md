@@ -6,10 +6,10 @@ This guide covers installation of ARGUS_V on Raspberry Pi and other Debian-based
 
 ```bash
 # Download the latest release
-curl -LO https://github.com/Ojas-bb/Argus_V/releases/latest/download/argus_v-v0.1.0.tar.gz
+curl -LO https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/releases/latest/download/argus_v-v0.1.0.tar.gz
 
 # Verify checksums (recommended)
-curl -LO https://github.com/Ojas-bb/Argus_V/releases/latest/download/SHA256SUMS
+curl -LO https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/releases/latest/download/SHA256SUMS
 sha256sum -c SHA256SUMS
 
 # Extract
@@ -89,7 +89,7 @@ Override defaults using environment variables:
 
 ```bash
 # Custom repository location (for development)
-export ARGUS_REPO_URL="https://github.com/yourusername/Argus_V.git"
+export ARGUS_REPO_URL="https://github.com/blah-blah-cell/Ulti_Argus_Monorepo.git"
 export ARGUS_REPO_REF="develop"
 
 sudo -E ./install.sh --non-interactive
@@ -491,7 +491,7 @@ For development work:
 
 ```bash
 # Clone repository
-git clone https://github.com/Ojas-bb/Argus_V.git
+git clone https://github.com/blah-blah-cell/Ulti_Argus_Monorepo.git
 cd Argus_V
 
 # Install in development mode
@@ -511,7 +511,7 @@ python -m argus_v.retina.cli --help
 - **Main README**: `README.md`
 - **Component Documentation**: `README.Docs/`
 - **Compliance**: `README.COMPLIANCE.md`
-- **GitHub Issues**: https://github.com/Ojas-bb/Argus_V/issues
+- **GitHub Issues**: https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/issues
 
 ## License
 

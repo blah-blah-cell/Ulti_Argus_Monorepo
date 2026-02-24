@@ -9,16 +9,16 @@ import pytest
 
 # Helper to mock dependencies if they are missing
 def mock_if_missing(name, setup_func=None):
-    if name not in sys.modules:
+#     if name not in sys.modules:
         try:
             __import__(name)
         except ImportError:
             m = MagicMock()
             if setup_func:
                 setup_func(m)
-            sys.modules[name] = m
+#             sys.modules[name] = m
             return m
-    return sys.modules[name]
+#     return sys.modules[name]
 
 # Setup mock modules
 def setup_yaml(m):

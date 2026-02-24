@@ -568,7 +568,7 @@ sudo tar -czf /tmp/argus-config-backup.tar.gz /etc/argus_v/
 sudo ./uninstall.sh
 
 # Download previous version
-curl -LO https://github.com/Ojas-bb/Argus_V/releases/download/vX.X.X/argus_v-vX.X.X.tar.gz
+curl -LO https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/releases/download/vX.X.X/argus_v-vX.X.X.tar.gz
 
 # Install previous version
 tar xzf argus_v-vX.X.X.tar.gz
