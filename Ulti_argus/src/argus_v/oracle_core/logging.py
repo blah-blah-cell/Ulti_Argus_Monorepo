@@ -98,6 +98,9 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
         pass
 
 
+JsonFormatter = CustomJsonFormatter
+
+
 def _normalize_level(level: str | int | None) -> int:
     if level is None:
         level = os.getenv("ARGUS_V_LOG_LEVEL", DEFAULT_LOG_LEVEL)

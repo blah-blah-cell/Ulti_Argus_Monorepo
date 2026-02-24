@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import sys
-from unittest.mock import MagicMock
-
 # Mock dependencies that are not available in the environment
-sys.modules["numpy"] = MagicMock()
-sys.modules["pandas"] = MagicMock()
-sys.modules["yaml"] = MagicMock()
-sys.modules["sklearn"] = MagicMock()
-sys.modules["sklearn.preprocessing"] = MagicMock()
-sys.modules["skops"] = MagicMock()
-sys.modules["skops.io"] = MagicMock()
-
+# sys.modules["numpy"] = MagicMock()
+# sys.modules["pandas"] = MagicMock()
+# sys.modules["yaml"] = MagicMock()
+# sys.modules["sklearn"] = MagicMock()
+# sys.modules["sklearn.preprocessing"] = MagicMock()
+# sys.modules["skops"] = MagicMock()
+# sys.modules["skops.io"] = MagicMock()
 import time  # noqa: E402
 
 from argus_v.kronos.ip_history import IPHistoryStore, IPRecord  # noqa: E402

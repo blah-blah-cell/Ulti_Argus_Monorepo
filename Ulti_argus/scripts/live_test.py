@@ -28,8 +28,8 @@ for p in payloads:
 print("\n[*] Fetching live logs from dashboard...")
 r = requests.get(f"{API_URL}/logs")
 logs = r.json()
-for l in logs[:5]:
-    print(f"    [{l['time']}] {l['type']} - {l['desc']}")
+for log_entry in logs[:5]:
+    print(f"    [{log_entry['time']}] {log_entry['type']} - {log_entry['desc']}")
 
 print("\n[*] Fetching system stats...")
 r = requests.get(f"{API_URL}/stats")

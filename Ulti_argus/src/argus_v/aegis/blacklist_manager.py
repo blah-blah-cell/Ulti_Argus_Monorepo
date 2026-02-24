@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 try:
-    import firebase_admin
-    from firebase_admin import credentials, storage
-    from google.cloud import storage as gcs
+    import firebase_admin  # noqa: F401
+    from firebase_admin import credentials, storage  # noqa: F401
+    from google.cloud import storage as gcs  # noqa: F401
     FIREBASE_AVAILABLE = True
 except ImportError:
     FIREBASE_AVAILABLE = False

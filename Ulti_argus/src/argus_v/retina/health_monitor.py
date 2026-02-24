@@ -260,7 +260,6 @@ class HealthMonitor:
             drop_rate = (packets_dropped - prev.packets_dropped) / time_delta
             
             # Calculate drop rate as percentage of total
-            total_packets = packets_captured - prev.packets_captured
             drop_rate_percent = (drop_rate / capture_rate * 100) if capture_rate > 0 else 0.0
             
             return capture_rate, processing_rate, drop_rate_percent

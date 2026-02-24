@@ -17,7 +17,7 @@ import pandas as pd
 try:
     import firebase_admin
     from firebase_admin import credentials, storage
-    from google.cloud import storage as gcs
+    from google.cloud import storage as gcs  # noqa: F401
     FIREBASE_AVAILABLE = True
 except ImportError:
     FIREBASE_AVAILABLE = False

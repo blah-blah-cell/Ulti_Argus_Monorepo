@@ -32,8 +32,10 @@ def draw_bar(val, max_val=1.0, width=30):
     filled = int(width * percent)
     
     color = GREEN
-    if val > 0.05: color = YELLOW
-    if val > 0.15: color = RED
+    if val > 0.05:
+        color = YELLOW
+    if val > 0.15:
+        color = RED
     
     bar = "=" * filled
     empty = " " * (width - filled)
@@ -58,7 +60,7 @@ def main():
              os.makedirs("/var/log/argus")
              with open(LOG_FILE, "w") as f:
                  f.write("[*] Log initialized\n")
-        except:
+        except Exception:
              pass 
 
     print("Initializing ARGUS Neuro-Link...")

@@ -2,7 +2,7 @@ import logging
 import random
 import time
 
-from src.argus_plugins.manager import ArgusPlugin
+from argus_v.plugins.manager import ArgusPlugin
 
 
 class ChimeraDeception(ArgusPlugin):
@@ -42,7 +42,8 @@ class ChimeraDeception(ArgusPlugin):
         # In a real XDP/Proxy, we would modify the response here.
         # For the plugin, we track the 'active recon' behavior.
         src = flow_data.get("src_ip")
-        if not src: return
+        if not src:
+            return
 
         # Simple port scan detection (simulated)
         if src not in self.threat_db:

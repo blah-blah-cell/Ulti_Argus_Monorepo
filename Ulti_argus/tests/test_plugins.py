@@ -5,7 +5,7 @@ import unittest
 # Ensure src is in path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
 
-from src.argus_plugins.manager import PluginManager
+from argus_v.plugins.manager import PluginManager
 
 
 class TestArgusPlugins(unittest.TestCase):

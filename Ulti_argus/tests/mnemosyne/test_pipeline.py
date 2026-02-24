@@ -9,6 +9,14 @@ import pytest
 from argus_v.mnemosyne.pipeline import MnemosynePipeline
 
 
+@pytest.fixture(autouse=True)
+def mock_firebase_admin():
+    """Mock firebase_admin dependencies."""
+    with patch("argus_v.mnemosyne.artifact_manager.credentials.Certificate"), \
+         patch("argus_v.mnemosyne.data_loader.credentials.Certificate"), \
+         patch("firebase_admin.credentials.Certificate"):
+        yield
+
 @pytest.fixture
 def complete_config():
     """Create a complete mnemosyne configuration."""
@@ -47,6 +55,7 @@ def complete_config():
     main_config.firebase = firebase_config
     main_config.preprocessing = preprocessing_config
     main_config.training = training_config
+    main_config.kronos_model_path = "/tmp/kronos_router.pkl"
     main_config.to_safe_dict.return_value = {
         "firebase": {"project_id": "test-project"},
         "preprocessing": {"contamination_range": (0.01, 0.1)},

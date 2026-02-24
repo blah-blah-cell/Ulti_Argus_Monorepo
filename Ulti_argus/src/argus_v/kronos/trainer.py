@@ -262,7 +262,7 @@ class KronosTrainer:
         """Basic accuracy stats on the training set."""
         preds = model.predict(X)
         accuracy = float(np.mean(preds == y))
-        counts = {int(k): int(v) for k, v in zip(*np.unique(y, return_counts=True))}
+        counts = {int(k): int(v) for k, v in zip(*np.unique(y, return_counts=True), strict=False)}
         return {
             "train_accuracy": round(accuracy, 4),
             "label_distribution": counts,

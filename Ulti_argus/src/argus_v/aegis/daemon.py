@@ -7,6 +7,7 @@ with proper dry-run mode handling and service lifecycle management.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -14,15 +15,14 @@ import signal
 import sys
 import threading
 import time
-import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-import yaml
-from prometheus_client import Counter, Gauge, Histogram, start_http_server
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+import yaml
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
 from pydantic import BaseModel
 
 from ..oracle_core.config import ValidationError
@@ -223,9 +223,9 @@ class AegisDaemon:
             # Load configuration
             self.config = load_aegis_config(config_path)
         except (OSError, ValueError, yaml.YAMLError, ValidationError) as e:
-            raise ServiceStartError(f"Failed to load configuration: {e}")
+            raise ServiceStartError(f"Failed to load configuration: {e}") from e
         except Exception as e:
-            raise ServiceStartError(f"Unexpected error loading configuration: {e}")
+            raise ServiceStartError(f"Unexpected error loading configuration: {e}") from e
         
         # Configure logging
         try:
@@ -319,7 +319,7 @@ class AegisDaemon:
                 level="error",
                 error=str(e)
             )
-            raise ServiceStartError(f"Component initialization failed: {e}")
+            raise ServiceStartError(f"Component initialization failed: {e}") from e
     
     def _validate_configuration(self) -> list[str]:
         """Validate daemon configuration.
@@ -404,7 +404,7 @@ class AegisDaemon:
                 self._setup_signal_handlers()
             except Exception as e:
                 # Critical failure: cannot handle signals
-                raise ServiceStartError(f"Failed to setup signal handlers: {e}")
+                raise ServiceStartError(f"Failed to setup signal handlers: {e}") from e
             
             # Initialize components step-by-step
             try:
@@ -414,7 +414,7 @@ class AegisDaemon:
                     anonymizer = HashAnonymizer(salt=self.config.anonymization_salt)
                     self._components['anonymizer'] = anonymizer
                 except Exception as e:
-                    raise ServiceStartError(f"Failed to initialize anonymizer: {e}")
+                    raise ServiceStartError(f"Failed to initialize anonymizer: {e}") from e
 
                 # Initialize model manager
                 try:
@@ -427,7 +427,7 @@ class AegisDaemon:
                     model_manager.high_risk_threshold = self.config.prediction.high_risk_threshold
                     self._components['model_manager'] = model_manager
                 except Exception as e:
-                    raise ServiceStartError(f"Failed to initialize ModelManager: {e}")
+                    raise ServiceStartError(f"Failed to initialize ModelManager: {e}") from e
 
                 # Initialize blacklist manager
                 try:
@@ -437,14 +437,14 @@ class AegisDaemon:
                     )
                     self._components['blacklist_manager'] = blacklist_manager
                 except Exception as e:
-                    raise ServiceStartError(f"Failed to initialize BlacklistManager: {e}")
+                    raise ServiceStartError(f"Failed to initialize BlacklistManager: {e}") from e
 
                 # Initialize feedback manager (Active Learning)
                 try:
                     feedback_manager = FeedbackManager(self.config)
                     self._components['feedback_manager'] = feedback_manager
                 except Exception as e:
-                    raise ServiceStartError(f"Failed to initialize FeedbackManager: {e}")
+                    raise ServiceStartError(f"Failed to initialize FeedbackManager: {e}") from e
 
                 # Initialize Kronos components if available
                 kronos_router = None
@@ -483,7 +483,7 @@ class AegisDaemon:
                     )
                     self._components['prediction_engine'] = prediction_engine
                 except Exception as e:
-                    raise ServiceStartError(f"Failed to initialize PredictionEngine: {e}")
+                    raise ServiceStartError(f"Failed to initialize PredictionEngine: {e}") from e
 
                 # Load initial model
                 try:
@@ -507,7 +507,7 @@ class AegisDaemon:
                     if not prediction_engine.start():
                         raise ServiceStartError("Failed to start prediction engine")
                 except Exception as e:
-                    raise ServiceStartError(f"Exception starting prediction engine: {e}")
+                    raise ServiceStartError(f"Exception starting prediction engine: {e}") from e
 
                 # Calculate dry run end time
                 self._stats['dry_run_end_time'] = (
@@ -556,19 +556,8 @@ class AegisDaemon:
                     start_http_server(9090)
                     log_event(logger, "prometheus_exporter_started", port=9090)
                 except Exception as e:
-                    log_event(logger, "prometheus_exporter_failed", error=str(e), level="error")               # Start Online Learning Thread
-                try:
-                    feedback_dir = Path(self.config.enforcement.feedback_dir)
-                    ol_thread = OnlineLearningThread(
-                        prediction_engine=prediction_engine,
-                        db_path=feedback_dir / "online_learning.db"
-                    )
-                    ol_thread.start()
-                    self._components['online_learning_thread'] = ol_thread
-                except Exception as ol_err:
-                    log_event(logger, "online_learning_start_failed", error=str(ol_err))
+                    log_event(logger, "prometheus_exporter_failed", error=str(e), level="error")
 
->>>>>>> main
                 log_event(
                     logger,
                     "aegis_daemon_started",

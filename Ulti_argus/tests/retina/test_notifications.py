@@ -1,24 +1,22 @@
 from __future__ import annotations
 
 import json
-import sys
 from unittest.mock import MagicMock, patch
 
 # Mock missing dependencies before importing argus_v
-sys.modules["firebase_admin"] = MagicMock()
-sys.modules["firebase_admin.credentials"] = MagicMock()
-sys.modules["firebase_admin.storage"] = MagicMock()
-sys.modules["pandas"] = MagicMock()
-sys.modules["numpy"] = MagicMock()
-sys.modules["scapy"] = MagicMock()
-sys.modules["scapy.all"] = MagicMock()
-sys.modules["psutil"] = MagicMock()
-sys.modules["sklearn"] = MagicMock()
-sys.modules["sklearn.ensemble"] = MagicMock()
-sys.modules["joblib"] = MagicMock()
-sys.modules["skops"] = MagicMock()
-sys.modules["torch"] = MagicMock()
-
+# sys.modules["firebase_admin"] = MagicMock()
+# sys.modules["firebase_admin.credentials"] = MagicMock()
+# sys.modules["firebase_admin.storage"] = MagicMock()
+# sys.modules["pandas"] = MagicMock()
+# sys.modules["numpy"] = MagicMock()
+# sys.modules["scapy"] = MagicMock()
+# sys.modules["scapy.all"] = MagicMock()
+# sys.modules["psutil"] = MagicMock()
+# sys.modules["sklearn"] = MagicMock()
+# sys.modules["sklearn.ensemble"] = MagicMock()
+# sys.modules["joblib"] = MagicMock()
+# sys.modules["skops"] = MagicMock()
+# sys.modules["torch"] = MagicMock()
 import pytest  # noqa: E402
 
 from argus_v.retina.config import AlertsConfig, EmailConfig, WebhookConfig  # noqa: E402

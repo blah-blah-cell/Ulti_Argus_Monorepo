@@ -11,7 +11,7 @@ from threading import Event, Thread
 from typing import Any, Callable, Iterator, Optional
 
 try:
-    from scapy.all import conf, get_if_addr, get_if_list, getmacbyip
+    from scapy.all import get_if_addr, get_if_list, getmacbyip
     from scapy.layers.inet import ICMP, IP, TCP, UDP
     from scapy.layers.inet6 import IPv6
     HAS_SCAPY = True

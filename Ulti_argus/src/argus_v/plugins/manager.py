@@ -24,13 +24,15 @@ class ArgusPlugin(ABC):
         """Called when plugin is loaded"""
         pass
 
+    @abstractmethod
     def on_packet(self, flow_data):
         """Optional: Inspect raw packet data (called by Aegis Core)"""
-        pass
+        # Default implementation does nothing
 
+    @abstractmethod
     def on_payload(self, content):
         """Optional: Inspect decrypted payload (called by Aegis Proxy/Mnemosyne)"""
-        pass
+        # Default implementation does nothing
 
 class PluginManager:
     def __init__(self, plugin_dir="d:/Argus_AI/src/argus_plugins"):

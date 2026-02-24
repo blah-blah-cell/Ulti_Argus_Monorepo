@@ -1,6 +1,5 @@
 
 import signal
-import sys
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -18,27 +17,27 @@ mock_firebase_admin = MagicMock()
 mock_daemon = MagicMock()
 mock_daemon_pidfile = MagicMock()
 
-sys.modules['yaml'] = mock_yaml
-sys.modules['scapy'] = mock_scapy
-sys.modules['scapy.all'] = mock_scapy
-sys.modules['pandas'] = mock_pandas
-sys.modules['numpy'] = mock_numpy
-sys.modules['sklearn'] = mock_sklearn
-sys.modules['sklearn.ensemble'] = MagicMock()
-sys.modules['sklearn.preprocessing'] = MagicMock()
-sys.modules['skops'] = mock_skops
-sys.modules['skops.io'] = MagicMock()
-sys.modules['firebase_admin'] = mock_firebase_admin
-sys.modules['daemon'] = mock_daemon
-sys.modules['daemon.pidfile'] = mock_daemon_pidfile
+# sys.modules['yaml'] = mock_yaml
+# sys.modules['scapy'] = mock_scapy
+# sys.modules['scapy.all'] = mock_scapy
+# sys.modules['pandas'] = mock_pandas
+# sys.modules['numpy'] = mock_numpy
+# sys.modules['sklearn'] = mock_sklearn
+# sys.modules['sklearn.ensemble'] = MagicMock()
+# sys.modules['sklearn.preprocessing'] = MagicMock()
+# sys.modules['skops'] = mock_skops
+# sys.modules['skops.io'] = MagicMock()
+# sys.modules['firebase_admin'] = mock_firebase_admin
+# sys.modules['daemon'] = mock_daemon
+# sys.modules['daemon.pidfile'] = mock_daemon_pidfile
 
 # Mock internal dependencies
 mock_aegis_daemon = MagicMock()
-sys.modules['argus_v.aegis.daemon'] = mock_aegis_daemon
+# sys.modules['argus_v.aegis.daemon'] = mock_aegis_daemon
 mock_aegis_config = MagicMock()
-sys.modules['argus_v.aegis.config'] = mock_aegis_config
+# sys.modules['argus_v.aegis.config'] = mock_aegis_config
 mock_oracle_logging = MagicMock()
-sys.modules['argus_v.oracle_core.logging'] = mock_oracle_logging
+# sys.modules['argus_v.oracle_core.logging'] = mock_oracle_logging
 
 # Now import the module under test
 from argus_v.aegis.cli import AegisCLI
@@ -102,7 +101,7 @@ class TestAegisCLI:
         mock_daemon_cls.assert_called_with('config.yaml')
 
         mock_exists.return_value = False
-        with pytest.raises(Exception):
+        with pytest.raises(RuntimeError):
             cli._load_daemon('config.yaml')
 
     @patch('argus_v.aegis.cli.AegisCLI._load_daemon')

@@ -13,7 +13,7 @@ import pytest
 
 from argus_v.aegis.cli import AegisCLI
 from argus_v.aegis.config import AegisConfig
-from argus_v.aegis.daemon import AegisDaemon
+from argus_v.aegis.daemon import AegisDaemon, ServiceStartError
 
 
 class TestAegisDaemonIntegration:
@@ -145,7 +145,7 @@ interfaces:
         invalid_config_file = self.temp_dir / "invalid_config.yaml"
         invalid_config_file.write_text("invalid: yaml: content: [")
         
-        with pytest.raises(Exception):  # Should fail to parse YAML
+        with pytest.raises(ServiceStartError):  # Should fail to parse YAML
             AegisDaemon(str(invalid_config_file))
         
         # Test with invalid values
@@ -157,7 +157,7 @@ polling:
   poll_interval_seconds: -1  # Invalid
 """)
         
-        with pytest.raises(Exception):  # Should fail validation
+        with pytest.raises(ServiceStartError):  # Should fail validation
             AegisDaemon(str(invalid_values_config))
     
     def test_health_monitoring(self):
