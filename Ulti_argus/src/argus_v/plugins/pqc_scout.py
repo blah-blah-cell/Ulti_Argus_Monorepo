@@ -1,6 +1,6 @@
 import logging
 
-from src.argus_plugins.manager import ArgusPlugin
+from argus_v.plugins.manager import ArgusPlugin
 
 
 class PQCScout(ArgusPlugin):
@@ -27,7 +27,8 @@ class PQCScout(ArgusPlugin):
         self.logger.info("PQC Scout v2.0 - Quantum-Resistant Detection Active")
 
     def on_payload(self, content: bytes):
-        if not content: return None
+        if not content:
+            return None
         
         found = []
         for sig, name in self.target_sigs.items():

@@ -11,7 +11,7 @@ from threading import Event, Thread
 from typing import Any, Callable, Iterator, Optional
 
 try:
-    from scapy.all import conf, get_if_addr, get_if_list, getmacbyip
+    from scapy.all import get_if_addr, get_if_list, getmacbyip
     from scapy.layers.inet import ICMP, IP, TCP, UDP
     from scapy.layers.inet6 import IPv6
     HAS_SCAPY = True
@@ -178,6 +178,12 @@ class CaptureEngine:
         """Start packet capture using pcapy fallback."""
         def capture_worker():
             try:
+                if not HAS_PCAPY:
+                    logger.warning("Pcapy not available. Running in mock capture mode.")
+                    while not self._stop_event.is_set():
+                        time.sleep(0.1)
+                    return
+
                 logger.info(f"Starting pcapy capture on {self.interface}")
                 
                 # Open capture handle

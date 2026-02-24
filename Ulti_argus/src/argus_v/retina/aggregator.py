@@ -158,7 +158,7 @@ class WindowAggregator:
         try:
             self._packet_queue.put_nowait(packet)
             return True
-        except:
+        except Exception:
             # Queue full, packet dropped
             with self._lock:
                 self._stats["packets_dropped"] += 1
@@ -184,7 +184,7 @@ class WindowAggregator:
                 # Get packet with timeout
                 try:
                     packet = self._packet_queue.get(timeout=1.0)
-                except:
+                except Exception:
                     continue
                 
                 # Process the packet

@@ -35,7 +35,7 @@ class KronosEnforcer:
     def _check_availability(self) -> bool:
         """Check if bpftool is installed and accessible."""
         try:
-            res = subprocess.run(
+            subprocess.run(
                 ["bpftool", "version"],
                 capture_output=True,
                 check=True,

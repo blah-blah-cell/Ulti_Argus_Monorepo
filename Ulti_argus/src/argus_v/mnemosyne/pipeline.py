@@ -7,6 +7,7 @@ preprocessing, training, and artifact management for the mnemosyne trainer.
 from __future__ import annotations
 
 import logging
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -314,12 +315,12 @@ class MnemosynePipeline:
                 )
             
             # Test Firebase connection
-            test_files = self._data_loader.list_training_csvs(max_age_hours=24*7)  # Last week
+            self._data_loader.list_training_csvs(max_age_hours=24*7)  # Last week
             validation_results['training_data_accessible'] = True
             
             # Test storage permissions (try to list models)
             try:
-                existing_models = self._artifact_manager.list_existing_models(max_age_days=1)
+                self._artifact_manager.list_existing_models(max_age_days=1)
                 validation_results['storage_permissions'] = True
             except Exception as e:
                 log_event(
@@ -420,7 +421,7 @@ class MnemosynePipeline:
         try:
             # Remove temporary directory
             if self._temp_dir and self._temp_dir.exists():
-                import shutil
+
                 shutil.rmtree(self._temp_dir)
                 log_event(
                     logger,

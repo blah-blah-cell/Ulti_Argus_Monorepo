@@ -169,7 +169,7 @@ Examples:
         )
         
         # Validate command
-        validate_parser = subparsers.add_parser(
+        subparsers.add_parser(
             'validate',
             help='Validate configuration'
         )
@@ -246,7 +246,7 @@ Examples:
             help='Force reload even if model exists'
         )
         
-        model_info_parser = model_subparsers.add_parser(
+        model_subparsers.add_parser(
             'info',
             help='Show model information'
         )
@@ -419,7 +419,7 @@ Examples:
             return daemon
             
         except Exception as e:
-            raise Exception(f"Failed to load daemon: {e}")
+            raise RuntimeError(f"Failed to load daemon: {e}") from e
     
     def _cmd_start(self, args) -> int:
         """Start daemon command.
@@ -513,7 +513,7 @@ Examples:
                         logger.info(f"Sent stop signal to process {pid}")
                         
                         # Wait for graceful shutdown
-                        for i in range(args.timeout):
+                        for _i in range(args.timeout):
                             try:
                                 os.kill(pid, 0)  # Check if process exists
                                 time.sleep(1)
@@ -1163,7 +1163,7 @@ Examples:
             status: Status dictionary
         """
         health = status.get('health', {})
-        daemon_stats = status.get('statistics', {})
+        status.get('statistics', {})
         
         logger.info("Aegis Daemon Status")
         logger.info("==================")

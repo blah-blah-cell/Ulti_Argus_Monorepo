@@ -1,21 +1,19 @@
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
 # Mock missing dependencies
-sys.modules['yaml'] = MagicMock()
-sys.modules['firebase_admin'] = MagicMock()
-sys.modules['google.cloud'] = MagicMock()
-sys.modules['scapy'] = MagicMock()
-sys.modules['scapy.all'] = MagicMock()
-sys.modules['pandas'] = MagicMock()
-sys.modules['numpy'] = MagicMock()
-sys.modules['sklearn'] = MagicMock()
-sys.modules['sklearn.ensemble'] = MagicMock()
-sys.modules['joblib'] = MagicMock()
-sys.modules['skops'] = MagicMock()
-
+# sys.modules['yaml'] = MagicMock()
+# sys.modules['firebase_admin'] = MagicMock()
+# sys.modules['google.cloud'] = MagicMock()
+# sys.modules['scapy'] = MagicMock()
+# sys.modules['scapy.all'] = MagicMock()
+# sys.modules['pandas'] = MagicMock()
+# sys.modules['numpy'] = MagicMock()
+# sys.modules['sklearn'] = MagicMock()
+# sys.modules['sklearn.ensemble'] = MagicMock()
+# sys.modules['joblib'] = MagicMock()
+# sys.modules['skops'] = MagicMock()
 from argus_v.aegis.blacklist_manager import BlacklistManager
 
 

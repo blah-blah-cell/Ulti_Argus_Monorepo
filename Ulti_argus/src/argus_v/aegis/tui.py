@@ -197,7 +197,7 @@ class AegisDashboard:
         table.add_column("Hits", justify="right", width=6)
         table.add_column("Blocked At", style="dim", width=20)
 
-        for ip, reason, risk, source, created_at, hit_count in blocks:
+        for ip, reason, risk, _source, created_at, hit_count in blocks:
             # Colorize risk
             risk_color = "yellow"
             if risk == "critical":

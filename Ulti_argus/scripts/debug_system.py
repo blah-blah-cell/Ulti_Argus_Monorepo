@@ -31,19 +31,19 @@ def run_diagnostics():
         "models/payload_ae.pth",
         "src/argus_plugins/manager.py"
     ]
-    all_files = True
     for p in required_paths:
         full_p = os.path.join(FEATURE_DIR, p)
         exists = os.path.exists(full_p)
         check_step(os.path.basename(p), exists, full_p if not exists else "Found")
-        if not exists: all_files = False
+        if not exists:
+            pass
         
     # 3. AI Brain Check
     print("\n[!] Checking Mnemosyne (AI Brain)...")
     try:
         model_path = os.path.join(FEATURE_DIR, "models/payload_ae.pth")
         if os.path.exists(model_path):
-            state = torch.load(model_path, map_location='cpu')
+            torch.load(model_path, map_location='cpu')
             check_step("Model Weights", True, "Loaded successfully")
             
             from src.mnemosyne.inference import analyze_payload
@@ -75,7 +75,7 @@ def run_diagnostics():
     if platform.system() == "Linux":
         # Check for BCC
         try:
-            from bcc import BPF
+            from bcc import BPF  # noqa: F401
             check_step("eBPF Support", True, "BCC Library Available")
         except ImportError:
             check_step("eBPF Support", False, "BCC not installed (Required for Aegis Kernel)")

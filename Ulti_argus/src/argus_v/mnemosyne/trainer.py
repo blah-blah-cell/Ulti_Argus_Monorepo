@@ -17,7 +17,7 @@ import pandas as pd
 import skops.io as sio
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import classification_report, roc_auc_score
-from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.model_selection import GridSearchCV, train_test_split  # noqa: E402
 
 from ..oracle_core.logging import log_event
 

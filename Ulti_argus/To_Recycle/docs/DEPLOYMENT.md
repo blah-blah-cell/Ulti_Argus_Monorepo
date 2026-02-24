@@ -133,13 +133,13 @@ This takes 5-10 minutes depending on your internet speed.
 
 ```bash
 cd /tmp
-curl -LO https://github.com/Ojas-bb/Argus_V/releases/latest/download/argus_v-v0.1.0.tar.gz
+curl -LO https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/releases/latest/download/argus_v-v0.1.0.tar.gz
 ```
 
 **Verify the download (recommended):**
 
 ```bash
-curl -LO https://github.com/Ojas-bb/Argus_V/releases/latest/download/SHA256SUMS
+curl -LO https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/releases/latest/download/SHA256SUMS
 sha256sum -c SHA256SUMS
 ```
 

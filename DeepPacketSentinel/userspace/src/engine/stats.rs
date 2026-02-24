@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use aya::maps::PerCpuArray;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

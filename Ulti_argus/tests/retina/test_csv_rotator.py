@@ -222,9 +222,10 @@ class TestFirebaseCSVStager:
         test_file.write_text("test,data\n1,2\n")
         
         # Set file modification time to be old (staged)
+        import os
         import time
         old_time = time.time() - 120  # 2 minutes ago
-        test_file.utime((old_time, old_time))
+        os.utime(test_file, (old_time, old_time))
         
         # Stage files
         staged_files = self.stager.stage_completed_files()
@@ -273,9 +274,10 @@ class TestFirebaseCSVStager:
         test_file.write_text("test,data\n1,2\n")
         
         # Set recent modification time (30 seconds ago)
+        import os
         import time
         recent_time = time.time() - 30
-        test_file.utime((recent_time, recent_time))
+        os.utime(test_file, (recent_time, recent_time))
         
         # Stage files
         staged_files = self.stager.stage_completed_files()

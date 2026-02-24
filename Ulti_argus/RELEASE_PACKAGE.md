@@ -32,7 +32,7 @@ sudo ./install.sh
 sudo ./install.sh --non-interactive
 
 # Custom repository
-sudo ./install.sh --repo https://github.com/custom/fork.git --ref develop
+sudo ./install.sh --repo https://github.com/blah-blah-cell/Ulti_Argus_Monorepo.git --ref develop
 
 # Skip dependency installation
 sudo ./install.sh --skip-dependencies
@@ -432,7 +432,7 @@ sudo chown -R root:root /etc/argus_v
 ## Support
 
 - **Documentation:** `INSTALL.md`, `TESTING.md`, `README.Docs/`
-- **Issues:** https://github.com/Ojas-bb/Argus_V/issues
+- **Issues:** https://github.com/blah-blah-cell/Ulti_Argus_Monorepo/issues
 - **Logs:** `sudo journalctl -u argus-*`
 
 ## License

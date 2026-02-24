@@ -22,7 +22,7 @@ MYTHOLOGICAL_NAMES = [
     "ares", "hephaestus", "hermes", "dionysus", "demeter", "hestia",
     # Norse  
     "odin", "thor", "loki", "freyja", "frigg", "tyr", "heimdall", "baldr",
-    "hodr", "vidar", "vali", "halla", "sif", "heimdall",
+    "hodr", "vidar", "vali", "halla", "sif",
     # Egyptian
     "ra", "osiris", "isis", "horus", "set", "anubis", "thoth", "bastet",
     "sekhmet", "hathor", "nephthys", "ptah", "sobek", "nut",
@@ -129,6 +129,7 @@ class MythologicalCSVRotator:
                     self._write_row(row)
                 
                 self._stats["total_rows"] += len(flow_data)
+                self.flush()
                 
             except Exception as e:
                 self._stats["errors"] += 1
@@ -191,7 +192,7 @@ class MythologicalCSVRotator:
         except Exception as e:
             self._stats["errors"] += 1
             logger.error(f"Error writing CSV row: {e}")
-            raise FileRotationError(f"Failed to write row: {e}")
+            raise FileRotationError(f"Failed to write row: {e}") from e
     
     def _open_new_file(self) -> None:
         """Open a new file with mythological naming."""
@@ -228,7 +229,7 @@ class MythologicalCSVRotator:
         except Exception as e:
             self._stats["errors"] += 1
             logger.error(f"Failed to open new file {self._current_file_path}: {e}")
-            raise FileRotationError(f"Failed to open file: {e}")
+            raise FileRotationError(f"Failed to open file: {e}") from e
     
     def _close_current_file(self) -> None:
         """Close the current file."""
@@ -294,9 +295,9 @@ class MythologicalCSVRotator:
         """Extract the mythological name from a filename."""
         # Expected format: {prefix}_{name}_{timestamp}.csv
         parts = filename.replace(".csv", "").split("_")
-        if len(parts) >= 3:
-            potential_name = parts[1]
-            return potential_name if potential_name in MYTHOLOGICAL_NAMES else None
+        for part in parts:
+            if part in MYTHOLOGICAL_NAMES:
+                return part
         return None
     
     def __enter__(self):
@@ -348,7 +349,6 @@ class FirebaseCSVStager:
     
     def get_staged_files(self) -> List[Path]:
         """Get list of files currently in staging."""
-        pattern = self.staging_dir / "*.csv"
         return sorted(self.staging_dir.glob("*.csv"))
     
     def mark_uploaded(self, file_path: Path) -> bool:

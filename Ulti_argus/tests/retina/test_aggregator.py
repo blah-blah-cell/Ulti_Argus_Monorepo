@@ -181,6 +181,9 @@ class TestWindowAggregator:
         result = self.aggregator.add_packet(packet)
         assert result is True
         
+        # Wait for processing
+        time.sleep(0.5)
+
         # Check statistics
         stats = self.aggregator.get_stats()
         assert stats["packets_processed"] == 1
@@ -206,6 +209,9 @@ class TestWindowAggregator:
             )
             self.aggregator.add_packet(packet)
         
+        # Wait for processing
+        time.sleep(0.5)
+
         # Check statistics
         stats = self.aggregator.get_stats()
         assert stats["packets_processed"] == 5
@@ -240,6 +246,9 @@ class TestWindowAggregator:
             )
             self.aggregator.add_packet(packet)
         
+        # Wait for processing before flush
+        time.sleep(0.5)
+
         # Force flush to check window completion
         self.aggregator._flush_current_window()
         
@@ -295,6 +304,9 @@ class TestWindowAggregator:
         )
         self.aggregator.add_packet(packet)
         
+        # Wait for processing before flush
+        time.sleep(0.5)
+
         # Force flush to trigger callback
         self.aggregator._flush_current_window()
         

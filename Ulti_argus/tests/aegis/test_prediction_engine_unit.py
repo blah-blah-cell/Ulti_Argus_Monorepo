@@ -322,12 +322,10 @@ class TestPredictionEngineUnit:
             # Missing dst_ip, bytes_in, etc.
         })
 
-        # If columns are missing entirely, code might raise KeyError during dropna
-        # or earlier. We should verify it raises or handles it.
-        # Given implementation, it will likely raise KeyError in dropna if col missing.
-
-        with pytest.raises((KeyError, Exception)):
-            self.engine._clean_flow_data(df)
+        # Should handle gracefully by returning DF (filling missing with 0)
+        cleaned = self.engine._clean_flow_data(df)
+        assert len(cleaned) == 1
+        assert cleaned.iloc[0]["bytes_in"] == 0
 
     def test_clean_flow_data_normalization(self):
         """Test normalization of flow data."""
@@ -366,36 +364,16 @@ class TestPredictionEngineUnit:
         file_path = self.csv_dir / "empty.csv"
         file_path.touch()
 
-        try:
-            # Depending on pandas version, read_csv on empty file might raise EmptyDataError
-            # But here we are testing _load_csv_data which might catch it or not.
-            # The implementation doesn't seem to catch EmptyDataError explicitly but logs error.
-            # However, read_csv usually raises EmptyDataError if file is empty.
-            # Let's see how implementation handles it.
-            # Implementation does:
-            # try: pd.read_csv... except Exception: raise CSVPollingError
-
-            with pytest.raises(CSVPollingError):
-                self.engine._load_csv_data(file_path)
-
-        except pd.errors.EmptyDataError:
-            # If implementation doesn't wrap it well or mocks behave differently
-            pass
+        # Should return empty DataFrame
+        df = self.engine._load_csv_data(file_path)
+        assert df.empty
 
     def test_load_csv_data_corrupt(self):
         """Test loading corrupt CSV file."""
         file_path = self.csv_dir / "corrupt.csv"
         file_path.write_text("invalid,csv,content")
 
-        # Depending on how it's parsed, might raise or return empty/malformed df
-        # If headers are missing or mismatched
-
         with pytest.raises(CSVPollingError):
-             # Force a pandas error by writing garbage that can't be parsed with expected dtypes potentially?
-             # Actually, single line "invalid,csv,content" might be parsed as header.
-             # Let's write something that causes type error or parse error if possible.
-             # But read_csv is quite lenient.
-
              # Instead, let's mock pd.read_csv to raise exception
              with patch('pandas.read_csv', side_effect=Exception("Corrupt")):
                  self.engine._load_csv_data(file_path)
@@ -413,13 +391,6 @@ class TestPredictionEngineUnit:
             def check_queue(*args):
                 if self.engine._csv_queue.empty():
                     self.engine._running = False
-                # Call task_done if get was called, but here we are in the loop.
-                # The loop calls task_done.
-
-            # Since get blocks with timeout, we just let it run one iteration essentially
-            # We can mock get to return item then raise Empty to exit loop?
-            # Or use side_effect on queue.get?
-            # Or just let the loop run and mock `self.engine._running` to switch off.
 
             # Better: mock process_csv_file to set running to false
             def process_and_stop(f):
@@ -602,11 +573,6 @@ class TestPredictionEngineUnit:
         mock_frame.payload = b"payload"
 
         # Setup ipc_listener mock to return frame once then loop break
-        # We need to break the loop.
-        # We can use side_effect on ipc_listener.get_frame to return frame then raise Exception to stop loop
-        # But loop catches Exception and sleeps.
-        # So better to use a side effect that sets running=False.
-
         def get_frame_side_effect(timeout):
             if self.engine._running:
                 self.engine._running = False # Stop after this
@@ -616,11 +582,17 @@ class TestPredictionEngineUnit:
         self.ipc_listener.get_frame.side_effect = get_frame_side_effect
         self.engine._running = True
 
-        # Mock model prediction
+        # Mock model prediction to return DataFrame with payload
+        # Note: In real execution, predict_flows receives DF with __raw_payload__
+        # and returns predictions.
+        # But _poll_ipc_socket passes the return of predict_flows to _process_batch_predictions.
+        # So the mock return value MUST include __raw_payload__ if we expect it later.
+
         self.model_manager.predict_flows.return_value = pd.DataFrame({
             "src_ip": ["192.168.1.1"],
             "prediction": [1],
-            "anomaly_score": [0.0]
+            "anomaly_score": [0.0],
+            "__raw_payload__": [b"payload"]
         })
 
         with patch.object(self.engine, '_process_batch_predictions') as mock_process:
@@ -648,15 +620,13 @@ class TestPredictionEngineUnit:
             mock_process.assert_not_called()
 
     def test_poll_ipc_socket_error(self):
-        """Test IPC socket polling error."""
-        # Raise exception
-        def get_frame_side_effect(timeout):
-            self.engine._running = False
-            raise RuntimeError("Socket error")
-
-        self.ipc_listener.get_frame.side_effect = get_frame_side_effect
+        """Test IPC socket polling error (missing listener)."""
+        self.engine.ipc_listener = None
         self.engine._running = True
 
-        with patch('time.sleep') as mock_sleep:
+        def stop_loop(*args):
+            self.engine._running = False
+
+        with patch('time.sleep', side_effect=stop_loop) as mock_sleep:
              self.engine._poll_ipc_socket()
-             mock_sleep.assert_called()
+             mock_sleep.assert_called_with(5)

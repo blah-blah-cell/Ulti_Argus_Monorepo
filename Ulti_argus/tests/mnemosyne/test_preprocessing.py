@@ -14,6 +14,7 @@ def preprocessing_config():
     """Create a mock preprocessing configuration."""
     config = Mock()
     config.log_transform_features = ["bytes_in", "bytes_out", "packets_in", "packets_out"]
+    config.feature_columns = None
     config.feature_normalization_method = "standard"
     config.contamination_auto_tune = True
     config.contamination_range = (0.01, 0.1)
@@ -27,17 +28,20 @@ def preprocessing_config():
 def sample_flow_df():
     """Create sample flow DataFrame for testing."""
     data = {
-        'timestamp': pd.to_datetime(['2024-01-01 10:00:00', '2024-01-01 10:01:00']),
-        'src_ip': ['192.168.1.1', '192.168.1.2'],
-        'dst_ip': ['192.168.1.2', '192.168.1.3'],
-        'src_port': [80, 443],
-        'dst_port': [12345, 80],
-        'protocol': ['TCP', 'UDP'],
-        'bytes_in': [1000, 5000],
-        'bytes_out': [500, 2500],
-        'packets_in': [10, 50],
-        'packets_out': [5, 25],
-        'duration': [1.5, 2.3]
+        'timestamp': pd.to_datetime([
+            '2024-01-01 10:00:00', '2024-01-01 10:01:00',
+            '2024-01-01 10:02:00', '2024-01-01 10:03:00', '2024-01-01 10:04:00'
+        ]),
+        'src_ip': ['192.168.1.1', '192.168.1.2', '192.168.1.3', '192.168.1.4', '192.168.1.5'],
+        'dst_ip': ['192.168.1.2', '192.168.1.3', '192.168.1.4', '192.168.1.5', '192.168.1.6'],
+        'src_port': [80, 80, 80, 80, 80],
+        'dst_port': [443, 443, 443, 443, 443],
+        'protocol': ['TCP', 'UDP', 'TCP', 'UDP', 'ICMP'],
+        'bytes_in': [1000, 5000, 2000, 3000, 4000],
+        'bytes_out': [500, 2500, 1000, 1500, 2000],
+        'packets_in': [10, 50, 20, 30, 40],
+        'packets_out': [5, 25, 10, 15, 20],
+        'duration': [1.5, 2.3, 1.8, 2.0, 1.9]
     }
     return pd.DataFrame(data)
 
@@ -53,7 +57,7 @@ class TestFlowPreprocessor:
         expected_features = ['bytes_in', 'bytes_out', 'packets_in', 'packets_out', 'duration',
                            'src_port', 'dst_port', 'protocol']
         
-        assert len(features_df) == 2
+        assert len(features_df) == 5
         assert list(features_df.columns) == expected_features
         assert 'protocol' in features_df.columns
         
@@ -139,7 +143,15 @@ class TestFlowPreprocessor:
         
         # Add some outlier data
         outlier_data = sample_flow_df.copy()
-        outlier_data.loc[0, 'bytes_in'] = 1000000  # Extreme outlier
+        # Add an outlier row with extreme value
+        # We need to make sure the row is added, not just modifying existing
+        # But for simplicity, modifying index 0 is fine if the rest are "normal"
+        # However, modifying one of 5 changes distribution slightly.
+        # Better to APPEND an outlier.
+
+        new_row = sample_flow_df.iloc[0].copy()
+        new_row['bytes_in'] = 100000000 # Very extreme
+        outlier_data = pd.concat([sample_flow_df, pd.DataFrame([new_row])], ignore_index=True)
         
         outlier_features = preprocessor.prepare_features(outlier_data)
         clean_df, stats = preprocessor.detect_feature_outliers(outlier_features)
@@ -150,13 +162,14 @@ class TestFlowPreprocessor:
         
         # Outlier should have been removed
         assert len(clean_df) < len(outlier_features)
+        assert len(clean_df) == len(sample_flow_df) # Should be back to original count
     
     def test_detect_feature_outliers_no_removal(self, preprocessing_config, sample_flow_df):
         """Test outlier detection with high threshold (no removal)."""
         preprocessor = FlowPreprocessor(preprocessing_config)
         features_df = preprocessor.prepare_features(sample_flow_df)
         
-        clean_df, stats = preprocessor.detect_feature_outliers(features_df, threshold=10.0)
+        clean_df, stats = preprocessor.detect_feature_outliers(features_df, threshold=100.0)
         
         # With high threshold, no outliers should be removed
         assert len(clean_df) == len(features_df)
@@ -219,7 +232,7 @@ class TestFlowPreprocessor:
         assert 'final_rows' in stats
         assert 'optimal_contamination' in stats
         
-        assert stats['initial_rows'] == 2
+        assert stats['initial_rows'] == 5
         assert stats['final_features'] > 0
         assert 0.01 <= stats['optimal_contamination'] <= 0.1
         

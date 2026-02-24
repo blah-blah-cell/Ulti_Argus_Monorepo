@@ -44,13 +44,15 @@ def deploy():
             print(f"    REMOTE_EXEC: {cmd}")
             stdin, stdout, stderr = ssh.exec_command(cmd)
             # Wait for command to finish and capture output
-            exit_status = stdout.channel.recv_exit_status()
+            stdout.channel.recv_exit_status()
             
             out = stdout.read().decode().strip()
             err = stderr.read().decode().strip()
             
-            if out: print(f"    [STDOUT] {out}")
-            if err: print(f"    [STDERR] {err}")
+            if out:
+                print(f"    [STDOUT] {out}")
+            if err:
+                print(f"    [STDERR] {err}")
             
     except Exception as e:
         print(f"[!] Deployment Failed: {e}")

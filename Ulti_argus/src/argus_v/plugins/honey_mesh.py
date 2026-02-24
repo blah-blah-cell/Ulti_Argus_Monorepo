@@ -1,6 +1,6 @@
 import logging
 
-from src.argus_plugins.manager import ArgusPlugin
+from argus_v.plugins.manager import ArgusPlugin
 
 
 class HoneyMesh(ArgusPlugin):
@@ -28,7 +28,8 @@ class HoneyMesh(ArgusPlugin):
         self.logger.info("Honey-Mesh Deception Grid ACTIVE. Ghost targets deployed.")
 
     def on_payload(self, content: bytes):
-        if not content: return None
+        if not content:
+            return None
         
         for path, trap_name in self.ghost_paths.items():
             if path in content:

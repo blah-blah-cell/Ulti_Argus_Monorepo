@@ -2,7 +2,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from argus_v.aegis.blacklist_manager import BlacklistManager
 
@@ -96,23 +96,33 @@ class TestBlacklistOptimization:
             manager = BlacklistManager(self.config)
             ip = "1.2.3.4"
 
-            # Mock the database connection to count calls
-            with patch('sqlite3.connect') as mock_connect:
-                # Mock the cursor and fetchone
-                mock_cursor = mock_connect.return_value.__enter__.return_value.cursor.return_value
-                mock_cursor.fetchone.return_value = None # Not blacklisted
+            # Mock the connection and cursor
+            mock_conn = Mock()
+            mock_cursor = Mock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_conn.__enter__ = Mock(return_value=mock_conn)
+            mock_conn.__exit__ = Mock(return_value=None)
 
-                # First call - should hit database
-                manager.is_blacklisted(ip)
-                assert mock_connect.call_count == 1
+            # Setup return values
+            # _check_db_status calls fetchone. Return None (not found).
+            mock_cursor.fetchone.return_value = None
 
-                # Second call - should be cached
-                manager.is_blacklisted(ip)
-                assert mock_connect.call_count == 1
+            # Inject mock connection
+            manager._local.conn = mock_conn
 
-                # Add to blacklist - should clear cache
-                manager.add_to_blacklist(ip, "test")
+            # First call - should hit database
+            manager.is_blacklisted(ip)
+            assert mock_cursor.execute.call_count == 1
 
-                # Third call - should hit database again
-                manager.is_blacklisted(ip)
-                assert mock_connect.call_count > 1
+            # Second call - should be cached
+            manager.is_blacklisted(ip)
+            assert mock_cursor.execute.call_count == 1
+
+            # Add to blacklist - should clear cache and hit DB for insert
+            manager.add_to_blacklist(ip, "test")
+            calls_after_add = mock_cursor.execute.call_count
+            assert calls_after_add > 1
+
+            # Third call - should hit database again (cache cleared)
+            manager.is_blacklisted(ip)
+            assert mock_cursor.execute.call_count > calls_after_add

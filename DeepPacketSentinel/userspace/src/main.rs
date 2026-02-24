@@ -15,7 +15,6 @@ use tracing::{error, info, warn};
 use tracing_subscriber::FmtSubscriber;
 
 mod engine;
-use engine::normalization::Normalizer;
 use engine::policy::PolicyEngine;
 use engine::protocol::{MockProtocolEngine, ProtocolEngine};
 use engine::kronos_sender::{new_shared_sender, SharedKronosSender, DEFAULT_SOCKET_PATH};

@@ -1,5 +1,4 @@
 import sqlite3
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -9,16 +8,16 @@ import pytest
 
 # Helper to mock dependencies if they are missing
 def mock_if_missing(name, setup_func=None):
-    if name not in sys.modules:
+#     if name not in sys.modules:
         try:
             __import__(name)
         except ImportError:
             m = MagicMock()
             if setup_func:
                 setup_func(m)
-            sys.modules[name] = m
+#             sys.modules[name] = m
             return m
-    return sys.modules[name]
+#     return sys.modules[name]
 
 # Setup mock modules
 def setup_yaml(m):
@@ -90,7 +89,8 @@ def blacklist_manager(mock_config):
     if Path(mock_config.blacklist_db_path).exists():
         Path(mock_config.blacklist_db_path).unlink()
 
-    with patch("argus_v.aegis.blacklist_manager.log_event"):
+    with patch("argus_v.aegis.blacklist_manager.log_event"), \
+         patch("argus_v.aegis.blacklist_manager.KronosEnforcer"):
         manager = BlacklistManager(mock_config)
         yield manager
 
@@ -129,7 +129,7 @@ class TestBlacklistManager:
         # Verify in DB via helper method to avoid raw SQL assumptions
         assert blacklist_manager.is_blacklisted(ip)
 
-        entries = blacklist_manager.get_blacklist_entries(active_only=True)
+        entries = list(blacklist_manager.get_blacklist_entries(active_only=True))
         assert len(entries) == 1
         # The stored IP is anonymized, so we check existence via is_blacklisted
 
@@ -149,7 +149,7 @@ class TestBlacklistManager:
         ttl = 1
         blacklist_manager.add_to_blacklist(ip, "reason", ttl_hours=ttl)
 
-        entries = blacklist_manager.get_blacklist_entries()
+        entries = list(blacklist_manager.get_blacklist_entries())
         assert len(entries) == 1
         expires_at = entries[0]['expires_at']
         assert expires_at is not None
@@ -237,12 +237,12 @@ class TestBlacklistManager:
         blacklist_manager.add_to_blacklist(ip2, "reason2", risk_level="high", source="prediction")
 
         # Filter by risk
-        high_risk = blacklist_manager.get_blacklist_entries(risk_level="high")
+        high_risk = list(blacklist_manager.get_blacklist_entries(risk_level="high"))
         assert len(high_risk) == 1
         assert high_risk[0]['risk_level'] == "high"
 
         # Filter by source
-        manual = blacklist_manager.get_blacklist_entries(source="manual")
+        manual = list(blacklist_manager.get_blacklist_entries(source="manual"))
         assert len(manual) == 1
         assert manual[0]['source'] == "manual"
 

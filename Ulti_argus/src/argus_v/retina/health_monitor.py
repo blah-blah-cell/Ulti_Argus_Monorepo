@@ -190,6 +190,13 @@ class HealthMonitor:
             if avg_drop_rate > self.max_drop_rate_percent:
                 status = "critical"
             
+            # Check active alerts for critical issues
+            active_alerts = [a for a in self._alert_history if not a.resolved]
+            if any(a.severity == "critical" for a in active_alerts):
+                status = "critical"
+            elif any(a.severity == "warning" for a in active_alerts) and status == "healthy":
+                status = "warning"
+
             return {
                 "status": status,
                 "timestamp": time.time(),
@@ -260,7 +267,6 @@ class HealthMonitor:
             drop_rate = (packets_dropped - prev.packets_dropped) / time_delta
             
             # Calculate drop rate as percentage of total
-            total_packets = packets_captured - prev.packets_captured
             drop_rate_percent = (drop_rate / capture_rate * 100) if capture_rate > 0 else 0.0
             
             return capture_rate, processing_rate, drop_rate_percent

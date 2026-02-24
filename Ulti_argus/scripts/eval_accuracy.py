@@ -11,7 +11,7 @@ from src.mnemosyne.model import PayloadClassifier
 MODEL_PATH = "d:/Argus_AI/models/payload_classifier.pth"
 
 # Reuse data generation functions from training script (duplicate for simplicity)
-import random
+import random  # noqa: E402
 
 
 def generate_normal_payload():
@@ -58,9 +58,9 @@ def generate_test_data(num_normal=500, num_attack=500):
     for _ in range(num_attack):
         data.append(generate_attack_payload())
         labels.append(1)
-    combined = list(zip(data, labels))
+    combined = list(zip(data, labels, strict=False))
     random.shuffle(combined)
-    data[:], labels[:] = zip(*combined)
+    data[:], labels[:] = zip(*combined, strict=False)
     data_tensor = torch.tensor(data, dtype=torch.float32) / 255.0
     label_tensor = torch.tensor(labels, dtype=torch.long)
     return data_tensor, label_tensor

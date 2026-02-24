@@ -1,7 +1,7 @@
 import logging
 import statistics
 
-from src.argus_plugins.manager import ArgusPlugin
+from argus_v.plugins.manager import ArgusPlugin
 
 
 class JitterHunter(ArgusPlugin):

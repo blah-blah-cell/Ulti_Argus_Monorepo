@@ -28,8 +28,8 @@ def test_configure_logging_with_file(tmp_path):
         # Verify file content
         content = log_file.read_text()
         assert "Test message for file logging" in content
-        # JSON formatter uses compact separators
-        assert '"level":"INFO"' in content
+        # JSON formatter output check (allow spaces)
+        assert '"level": "INFO"' in content or '"level":"INFO"' in content
 
     finally:
         # Cleanup handlers

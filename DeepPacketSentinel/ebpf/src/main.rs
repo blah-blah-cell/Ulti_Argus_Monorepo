@@ -170,14 +170,14 @@ fn copy_payload<const OFF: usize>(ctx: &XdpContext, payload: &mut [u8; 128]) {
 
     // We only try to copy 32 bytes to avoid blowing up instruction count
     // A constant loop 0..32 with constant offset should be fine
-    for i in 0..32 {
+    for (i, item) in payload.iter_mut().enumerate().take(32) {
         let offset = OFF + i;
         // Strict bound check
         if data_start + offset + 1 > data_end {
             break;
         }
         unsafe {
-            payload[i] = *((data_start + offset) as *const u8);
+            *item = *((data_start + offset) as *const u8);
         }
     }
 }

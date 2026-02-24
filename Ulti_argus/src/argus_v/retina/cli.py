@@ -88,16 +88,16 @@ Examples:
     )
     
     # Status command
-    status_parser = subparsers.add_parser("status", help="Show daemon status")
+    subparsers.add_parser("status", help="Show daemon status")
     
     # Stats command
-    stats_parser = subparsers.add_parser("stats", help="Show capture statistics")
+    subparsers.add_parser("stats", help="Show capture statistics")
     
     # Validate command
-    validate_parser = subparsers.add_parser("validate", help="Validate configuration file")
+    subparsers.add_parser("validate", help="Validate configuration file")
     
     # List interfaces command
-    interfaces_parser = subparsers.add_parser("interfaces", help="List available network interfaces")
+    subparsers.add_parser("interfaces", help="List available network interfaces")
     
     return parser
 
@@ -155,7 +155,7 @@ def load_retina_config(config_path: str, overrides: dict = None) -> RetinaConfig
         return retina_config
         
     except Exception as e:
-        raise ValueError(f"Failed to load retina configuration: {e}")
+        raise ValueError(f"Failed to load retina configuration: {e}") from e
 
 
 def configure_logging_from_args(args) -> logging.Logger:
@@ -176,7 +176,10 @@ def configure_logging_from_args(args) -> logging.Logger:
             # Create file handler
             file_handler = logging.FileHandler(str(log_path))
             file_handler.name = "argus_file"
-            file_handler.setFormatter(JsonFormatter())
+            file_handler.setFormatter(JsonFormatter(
+                '%(levelname)s %(name)s %(message)s',
+                rename_fields={'levelname': 'level', 'name': 'logger'}
+            ))
             file_handler.addFilter(PrivacyFilter())
 
             # Add to root logger to capture all logs

@@ -13,8 +13,10 @@ YELLOW = "\033[93m"
 RESET = "\033[0m"
 
 def get_anomaly_color(score):
-    if score > 0.1: return RED
-    if score > 0.05: return YELLOW
+    if score > 0.1:
+        return RED
+    if score > 0.05:
+        return YELLOW
     return GREEN
 
 def test_payload(name, payload_bytes):
