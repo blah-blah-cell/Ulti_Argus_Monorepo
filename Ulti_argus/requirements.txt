@@ -1,0 +1,8 @@
+# Compatibility installer. Prefer: pip install -e ./Ulti_argus
+PyYAML==6.0.2
+fastapi==0.115.0
+numpy==1.26.4
+psutil==6.1.0
+scapy==2.6.1
+slowapi==0.1.9
+uvicorn==0.32.0

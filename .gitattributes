@@ -1,0 +1,33 @@
+# Default: let Git decide text vs binary
+* text=auto
+# Force LF for files that are executed on Linux/macOS (Pi targets)
+# CRLF in these would break `bad interpreter` / shebang on Unix.
+*.sh         text eol=lf
+*.bash       text eol=lf
+start.sh     text eol=lf
+Ulti_argus/install.sh    text eol=lf
+Ulti_argus/uninstall.sh  text eol=lf
+Ulti_argus/update.sh     text eol=lf
+Ulti_argus/run_train.sh  text eol=lf
+# Python / config files: enforce LF
+*.py    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.toml  text eol=lf
+*.ini   text eol=lf
+*.cfg   text eol=lf
+# Markdown / JSON: let Git auto-detect but prefer LF
+*.md   text eol=lf
+*.json text eol=lf
+# Windows-only files stay CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+# Binary catch-all
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.gz  binary

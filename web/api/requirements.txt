@@ -1,0 +1,15 @@
+# This file is kept aligned with the canonical pins in
+# Ulti_argus/requirements.txt to avoid version drift when installed
+# alongside it. Use the root requirements for a full install:
+#
+#     pip install -r Ulti_argus/requirements.txt
+#
+# Keep aligned with Ulti_argus/requirements.txt.
+
+fastapi==0.115.0
+uvicorn==0.32.0
+psutil==6.1.0
+PyYAML==6.0.2
+numpy==1.26.4
+scapy==2.6.1
+slowapi==0.1.9

@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev
+
+      - name: Install package and development tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "./Ulti_argus[dev]" build
+
+      - name: Reject Python syntax and undefined-name failures
+        run: >-
+          ruff check --config Ulti_argus/pyproject.toml
+          --select E9,F63,F7,F82 Ulti_argus/src web/api Ulti_argus/tests
+
+      - name: Lint the supported public runtime
+        run: >-
+          ruff check --config Ulti_argus/pyproject.toml
+          --select E,F,I,B --ignore E501,B008
+          web/api Ulti_argus/src/argus_v Ulti_argus/tests
+
+      - name: Test public package and API
+        run: pytest -q Ulti_argus/tests
+
+      - name: Build Python distributions
+        run: python -m build Ulti_argus
+
+  public-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Enforce the source-only release boundary
+        shell: bash
+        run: |
+          if git ls-files | grep -E '(argus-baseline\.json|\.(pkl|pickle|joblib|pt|pth|onnx|npz|npy|h5|hdf5|pcap|pcapng|etl|pem|key|p12|pfx))$'; then
+            echo "A model, dataset, capture, or credential artifact is tracked." >&2
+            exit 1
+          fi
+          test ! -d web/.next
+          test ! -d web/app
+          test ! -d models

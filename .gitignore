@@ -1,0 +1,162 @@
+# Large files
+web/node_modules/
+checkpoints/
+*.node
+
+# Virtual environment
+venv/
+.venv/
+
+# Backup files
+*.bak
+*.bak.*
+
+# Graphify knowledge graph
+graphify-out/
+
+# OpenCode / Everything Claude Code
+.opencode/
+
+# API Keys and Secrets - NEVER COMMIT THESE
+.env
+.env.*
+*.env
+!.env.example
+secrets/
+credentials/
+api_keys/
+.secrets/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+# Specific secret-file naming patterns (narrower than the old *_key / *_secret
+# wildcards, which silently ignored legitimate files like public_key.py).
+secret.json
+secret.yaml
+secret.yml
+secrets.json
+secrets.yaml
+secrets.yml
+*.secret.json
+*.secret.yaml
+*.secret.yml
+*-secrets.json
+*-secrets.yaml
+*-secrets.yml
+
+# IDE and Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Training outputs
+training_pack/models/
+training_pack/logs/
+runs/
+models/
+checkpoints/
+datasets/
+web/api/token.txt
+
+# Data files (large)
+*.parquet
+*.csv.gz
+data/raw/
+data/processed/
+
+# Model artifacts are private runtime inputs, never repository content.
+*.argus-baseline.json
+*.pkl
+*.pickle
+*.joblib
+*.pt
+*.pth
+*.h5
+*.hdf5
+*.npz
+*.npy
+*.pb
+*.tflite
+*.coreml
+*.onnx
+*.onnx.data
+
+# Captures may contain sensitive network traffic.
+*.pcap
+*.pcapng
+*.etl
+
+# Cache
+.cache/
+*.cache
+
+# Tauri / Desktop app
+argus-desktop/dist/
+argus-desktop/src-tauri/target/
+argus-desktop/src-tauri/gen/
+ 
+# Temporary Development Scripts
+*download*.py
+*train*.py

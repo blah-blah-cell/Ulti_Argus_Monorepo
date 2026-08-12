@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="title desc">
+  <title id="title">Argus Community</title>
+  <desc id="desc">A dark network grid with an eye-shaped observability mark and the text local network visibility.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#06111b"/>
+      <stop offset="0.55" stop-color="#0a1c2a"/>
+      <stop offset="1" stop-color="#102a3b"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38ddd4"/>
+      <stop offset="1" stop-color="#5b8cff"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#38ddd4" stop-opacity=".25"/>
+      <stop offset="1" stop-color="#38ddd4" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
+      <path d="M44 0H0V44" fill="none" stroke="#7ccad3" stroke-opacity=".08"/>
+    </pattern>
+    <filter id="soft"><feGaussianBlur stdDeviation="14"/></filter>
+  </defs>
+  <rect width="1200" height="320" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="320" rx="28" fill="url(#grid)"/>
+  <circle cx="180" cy="160" r="155" fill="url(#glow)"/>
+  <circle cx="1060" cy="20" r="180" fill="#5b8cff" opacity=".07" filter="url(#soft)"/>
+
+  <g transform="translate(78 72)" fill="none" stroke="url(#accent)">
+    <path d="M18 88C58 22 140 5 205 36c29 14 52 34 70 52-37 58-98 88-154 88S52 146 18 88Z" stroke-width="7"/>
+    <circle cx="145" cy="88" r="48" stroke-width="7"/>
+    <circle cx="145" cy="88" r="15" fill="#38ddd4" stroke="none"/>
+    <path d="M0 34h42M0 142h42M248 15v35M275 126h34" stroke-width="4" stroke-linecap="round" opacity=".7"/>
+    <circle cx="0" cy="34" r="5" fill="#38ddd4" stroke="none"/>
+    <circle cx="0" cy="142" r="5" fill="#5b8cff" stroke="none"/>
+    <circle cx="248" cy="15" r="5" fill="#5b8cff" stroke="none"/>
+    <circle cx="309" cy="126" r="5" fill="#38ddd4" stroke="none"/>
+  </g>
+
+  <g font-family="Inter,Segoe UI,Arial,sans-serif">
+    <text x="450" y="132" fill="#f0f8fc" font-size="62" font-weight="750" letter-spacing="-1">ARGUS</text>
+    <text x="450" y="180" fill="#8fa9ba" font-size="28" font-weight="500" letter-spacing="7">COMMUNITY</text>
+    <rect x="450" y="207" width="570" height="2" fill="url(#accent)" opacity=".75"/>
+    <text x="450" y="247" fill="#a8bdc9" font-size="21">Local network visibility &#183; bounded state &#183; truthful output</text>
+  </g>
+</svg>
