@@ -6,12 +6,11 @@ imported on systems without scapy (e.g. CI lint hosts).
 from __future__ import annotations
 
 import time
-from typing import Dict, Optional
 
 from web.api.capture.constants import PROTOCOL_MAP
 
 
-def extract_packet(pkt) -> Optional[Dict]:
+def extract_packet(pkt) -> dict | None:
     """Layer 0: Extract packet info with FULL DPI feature extraction."""
     try:
         from scapy.layers.inet import ICMP, IP, TCP, UDP
@@ -102,5 +101,5 @@ def extract_packet(pkt) -> Optional[Dict]:
             info["wireshark_features"] = pkt._wireshark_features
 
         return info
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None

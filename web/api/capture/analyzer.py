@@ -1,20 +1,18 @@
 """Convert a completed real flow into a Community observation result."""
 from __future__ import annotations
 
-from typing import Dict
-
 from web.api.capture import bootstrap, state
 from web.api.capture.dpi import dpi_extract_features
 from web.api.capture.inference import build_observation
 
 
-def analyze_flow(flow: Dict) -> Dict:
+def analyze_flow(flow: dict) -> dict:
     """Analyze observed properties without inventing a model verdict."""
     stats = state.stats
 
     # Layer 0 DPI summary
     dpi_apps = list(
-        set(r.get("app_id", "Unknown") for r in flow.get("dpi_results", []))
+        {r.get("app_id", "Unknown") for r in flow.get("dpi_results", [])}
     )
     dpi_app = dpi_apps[0] if dpi_apps else "Unknown"
     if dpi_app != "Unknown":
@@ -38,7 +36,7 @@ def analyze_flow(flow: Dict) -> Dict:
             if isinstance(val, str) and val.startswith("0x"):
                 return int(val, 16)
             return int(val) if val is not None and val != "" else default
-        except Exception:
+        except (ValueError, TypeError):
             return default
 
     # Parse TCP flags only if it's TCP protocol and tcp_flags is present in wireshark_features

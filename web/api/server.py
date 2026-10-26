@@ -28,7 +28,7 @@ if dotenv_path.is_file():
             if key and key not in os.environ:
                 os.environ[key] = value.strip()
 
-from web.api.deps import ALLOWED_ORIGINS, MAX_REQUEST_BODY_BYTES, limiter  # noqa: E402
+from web.api.deps import ALLOWED_ORIGINS, MAX_REQUEST_BODY_BYTES, limiter
 
 app = FastAPI(
     title="Argus Community API",
@@ -74,10 +74,10 @@ app.add_middleware(
     max_age=600,
 )
 
-from web.api.routers.auth import router as auth_router  # noqa: E402
-from web.api.routers.detect import router as detect_router  # noqa: E402
-from web.api.routers.signatures import router as signatures_router  # noqa: E402
-from web.api.routers.system import router as system_router  # noqa: E402
+from web.api.routers.auth import router as auth_router
+from web.api.routers.detect import router as detect_router
+from web.api.routers.signatures import router as signatures_router
+from web.api.routers.system import router as system_router
 
 app.include_router(system_router)
 app.include_router(auth_router)

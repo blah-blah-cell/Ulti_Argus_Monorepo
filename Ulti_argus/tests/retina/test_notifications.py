@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 # sys.modules["skops"] = MagicMock()
 # sys.modules["torch"] = MagicMock()
 import pytest  # noqa: E402
+
 from argus_v.retina.config import AlertsConfig, EmailConfig, WebhookConfig  # noqa: E402
 from argus_v.retina.health_monitor import HealthAlert, HealthMetrics  # noqa: E402
 from argus_v.retina.notifications import AlertNotificationDispatcher  # noqa: E402

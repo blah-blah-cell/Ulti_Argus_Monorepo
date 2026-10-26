@@ -6,6 +6,7 @@ import time
 from unittest.mock import Mock, patch
 
 import pytest
+
 from argus_v.retina.collector import CaptureEngine, InterfaceMonitor, PacketInfo
 
 

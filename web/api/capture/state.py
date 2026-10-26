@@ -13,7 +13,7 @@ containers.
 from __future__ import annotations
 
 import threading
-from typing import Any, Dict, List
+from typing import Any
 
 from web.api.capture.flow_tracker import FlowTracker
 
@@ -21,11 +21,11 @@ from web.api.capture.flow_tracker import FlowTracker
 tracker: FlowTracker = FlowTracker(timeout=5.0)
 
 # Recent flow analysis results (capped at MAX_RESULTS in runtime.packet_callback).
-results: List[Dict[str, Any]] = []
+results: list[dict[str, Any]] = []
 results_lock = threading.Lock()
 
 # Aggregate observed counters surfaced via get_stats().
-stats: Dict[str, int] = {
+stats: dict[str, int] = {
     "packets": 0,
     "bytes": 0,
     "flows": 0,

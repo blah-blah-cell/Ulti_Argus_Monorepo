@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 import time
@@ -29,7 +30,7 @@ def _interfaces() -> list[str]:
         from scapy.all import get_if_list
 
         return sorted(set(get_if_list()))
-    except Exception:
+    except Exception:  # noqa: BLE001
         return sorted(psutil.net_if_addrs())
 
 
@@ -98,7 +99,7 @@ async def toggle_capture(request: Request, body: dict[str, Any]):
             if _sniffer is not None:
                 try:
                     _sniffer.stop()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     _capture_error = sanitize_error(exc)
                     return JSONResponse(status_code=500, content={"error": _capture_error})
                 finally:
@@ -121,12 +122,12 @@ async def toggle_capture(request: Request, body: dict[str, Any]):
                 store=False,
             )
             _sniffer.start()
-            time.sleep(0.05)
+            await asyncio.sleep(0.05)
             if not _capture_active():
                 raise RuntimeError("capture backend did not start")
             _capture_error = None
             return {"status": "running", "interface": interface or "default"}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             _sniffer = None
             _capture_error = sanitize_error(exc)
             return JSONResponse(status_code=503, content={"error": _capture_error})

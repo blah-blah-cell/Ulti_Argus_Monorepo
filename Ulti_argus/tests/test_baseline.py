@@ -4,6 +4,9 @@ import json
 
 import numpy as np
 import pytest
+from web.api.capture import bootstrap
+from web.api.capture.analyzer import analyze_flow
+
 from argus_v.baseline import (
     FEATURE_NAMES,
     BaselineModel,
@@ -13,9 +16,6 @@ from argus_v.baseline import (
     train,
     vectorize,
 )
-
-from web.api.capture import bootstrap
-from web.api.capture.analyzer import analyze_flow
 
 
 def _observation(index: int, *, attack: bool) -> dict[str, float]:
