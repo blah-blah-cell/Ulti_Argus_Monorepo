@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
-
 from argus_v.oracle_core.anonymize import hash_ip, round_datetime
 
 

@@ -8,9 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "Ulti_argus" / "src"))
 
-from argus_v.baseline import BaselineModel, load_model
-from argus_v.dpi.features import FeatureVector
-from argus_v.dpi.patterns import PatternEngine
+from argus_v.baseline import BaselineModel, load_model  # noqa: E402
+from argus_v.dpi.features import FeatureVector  # noqa: E402
+from argus_v.dpi.patterns import PatternEngine  # noqa: E402
 
 pattern_engine = PatternEngine()
 feature_vector = FeatureVector()

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Start the Argus Community API and open its local dashboard."""
 
+# ruff: noqa: E402
 import sys
 from pathlib import Path
 
