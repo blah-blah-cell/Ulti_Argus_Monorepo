@@ -20,7 +20,6 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path
-from typing import List, Optional
 
 from fastapi import HTTPException, Request, Security
 from fastapi.security import APIKeyHeader, OAuth2PasswordBearer
@@ -104,13 +103,13 @@ def sanitize_error(e: Exception) -> str:
     if "not available" in msg or "unavailable" in msg:
         return str(e)
     # Log full error internally, return generic message.
-    print(f"[SECURITY] Error: {type(e).__name__}: {str(e)}")
+    print(f"[SECURITY] Error: {type(e).__name__}: {e!s}")
     return "An internal error occurred"
 
 
 # ── Path validation ────────────────────────────────────────────────────────
 
-def validate_path(path: Path, allowed_dirs: Optional[List[Path]] = None) -> Path:
+def validate_path(path: Path, allowed_dirs: list[Path] | None = None) -> Path:
     """Resolve ``path`` and ensure it lives under an allowed directory.
 
     Raises 403 otherwise. Used to prevent path traversal in endpoints that
@@ -197,23 +196,23 @@ def validate_list(
 
 
 __all__ = [
-    "ROOT_DIR",
-    "limiter",
-    "API_KEY",
-    "API_KEY_NAME",
-    "API_KEY_IS_AUTO_GENERATED",
-    "api_key_header",
-    "get_api_key",
     "ALLOWED_ORIGINS",
+    "API_KEY",
+    "API_KEY_IS_AUTO_GENERATED",
+    "API_KEY_NAME",
     "INTERNAL_API_KEY",
-    "sanitize_error",
-    "validate_path",
-    "validate_input",
-    "validate_ip",
-    "validate_list",
-    "MAX_STRING_LEN",
     "MAX_DOMAIN_LEN",
     "MAX_IP_LEN",
     "MAX_LIST_LEN",
     "MAX_REQUEST_BODY_BYTES",
+    "MAX_STRING_LEN",
+    "ROOT_DIR",
+    "api_key_header",
+    "get_api_key",
+    "limiter",
+    "sanitize_error",
+    "validate_input",
+    "validate_ip",
+    "validate_list",
+    "validate_path",
 ]

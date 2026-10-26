@@ -6,8 +6,6 @@ state (results, stats, pattern matches).
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 from web.api.capture import bootstrap, state
 from web.api.capture.analyzer import analyze_flow
 from web.api.capture.constants import MAX_RESULTS
@@ -48,12 +46,12 @@ def flush_tracker():
                 state.results.pop(0)
 
 
-def get_results(limit: int = 50) -> List[Dict]:
+def get_results(limit: int = 50) -> list[dict]:
     with state.results_lock:
         return list(state.results[-limit:])
 
 
-def get_flow_by_id(flow_id: str) -> Optional[Dict]:
+def get_flow_by_id(flow_id: str) -> dict | None:
     """Get a specific flow by ID."""
     with state.results_lock:
         for r in state.results:
@@ -62,7 +60,7 @@ def get_flow_by_id(flow_id: str) -> Optional[Dict]:
     return None
 
 
-def get_stats() -> Dict:
+def get_stats() -> dict:
     pattern_stats = bootstrap.pattern_engine.get_stats()
     if bootstrap.baseline_model is not None:
         baseline = {
@@ -83,6 +81,6 @@ def get_stats() -> Dict:
     }
 
 
-def get_pattern_matches(limit: int = 50) -> List[Dict]:
+def get_pattern_matches(limit: int = 50) -> list[dict]:
     """Get recent pattern matches."""
     return bootstrap.pattern_engine.get_recent_matches(limit)

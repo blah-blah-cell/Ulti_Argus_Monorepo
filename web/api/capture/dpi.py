@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Any, Dict, List
+from typing import Any
 
 from argus_v.dpi import calculate_entropy
 
@@ -19,7 +19,7 @@ from web.api.capture.constants import MALICIOUS_PATTERNS, SUSPICIOUS_PORTS
 
 def dpi_identify_protocol(
     payload: bytes, dst_port: int, src_port: int
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Layer 0 DPI: Identify application protocol from payload."""
     result = {
         "app_id": "Unknown",
@@ -108,7 +108,7 @@ def dpi_identify_protocol(
                     idx += 1 + length
                 if qname:
                     result["dns_query"] = qname.decode().rstrip(".")
-            except Exception:
+            except (IndexError, UnicodeDecodeError):
                 pass
         return result
 
@@ -147,7 +147,7 @@ def dpi_identify_protocol(
     return result
 
 
-def dpi_scan_patterns(payload: bytes) -> List[Dict[str, str]]:
+def dpi_scan_patterns(payload: bytes) -> list[dict[str, str]]:
     """Layer 0 DPI: Scan payload for malicious patterns."""
     if not payload:
         return []
@@ -167,7 +167,7 @@ def dpi_scan_patterns(payload: bytes) -> List[Dict[str, str]]:
     return matches
 
 
-def dpi_extract_features(payload: bytes) -> Dict[str, Any]:
+def dpi_extract_features(payload: bytes) -> dict[str, Any]:
     """Layer 0 DPI: Extract deep features from payload."""
     if not payload:
         return {}
