@@ -48,7 +48,16 @@ def test_only_supported_runtime_packages_are_published() -> None:
 def test_public_api_excludes_private_service_groups() -> None:
     from web.api.server import app
 
-    paths = {route.path for route in app.routes}
+    def get_all_paths(router) -> set[str]:
+        routes = set()
+        for r in router.routes:
+            if type(r).__name__ == "_IncludedRouter":
+                routes.update(get_all_paths(r.original_router))
+            elif hasattr(r, "path"):
+                routes.add(r.path)
+        return routes
+
+    paths = get_all_paths(app)
     forbidden_prefixes = (
         "/api/pipeline",
         "/api/models",
